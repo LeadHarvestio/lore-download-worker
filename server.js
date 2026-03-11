@@ -286,7 +286,7 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
   var expectedMp4 = path.join(DOWNLOAD_DIR, assetId + ".mp4");
 
   var args = [
-    "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+    "-f", "bestvideo[height<=1080][vcodec^=avc]+bestaudio/best[height<=1080]/best",
     "--merge-output-format", "mp4",
     "--no-playlist",
     "--retries", "3",
