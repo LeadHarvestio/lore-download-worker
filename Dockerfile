@@ -18,15 +18,3 @@ COPY server.js ./
 EXPOSE ${PORT:-3001}
 
 CMD ["node", "server.js"]
-```
-
-4. Click **"Commit changes"** → **"Commit changes"**
-
-**Step 3: Verify your repo**
-
-Your repo page should now show exactly 4 files:
-```
-Dockerfile
-README.md
-package.json
-server.js
