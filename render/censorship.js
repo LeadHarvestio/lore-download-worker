@@ -49,7 +49,7 @@ function muteVolumeFilter(ranges) {
   if (!ranges.length) return "";
   for (const r of ranges) if (!Number.isFinite(r.start) || !Number.isFinite(r.end) || r.start < 0 || r.end <= r.start) throw new Error("Invalid mute interval.");
   const expression = ranges.map((r) => `between(t,${r.start.toFixed(3)},${r.end.toFixed(3)})`).join("+");
-  return `volume=0:enable='${expression}'`;
+  return `asetnsamples=n=441:p=0,volume=0:enable='${expression}'`;
 }
 export {
   censorText,

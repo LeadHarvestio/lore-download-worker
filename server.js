@@ -333,7 +333,7 @@ app.get("/api/process/status/:jobId", auth, function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), capabilities: { censorship: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), capabilities: { censorship: 1, audioMuteFrameMs: 10 } });
 });
 
 // Synchronous one-frame PNG of a style, for the Review page live preview.
