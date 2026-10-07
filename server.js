@@ -4,14 +4,23 @@ import { promisify } from "util";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { Readable, Transform } from "stream";
+import { pipeline } from "stream/promises";
+import { fileURLToPath } from "url";
+import { processVideo } from "./video-processor.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
 app.use(express.json());
 
 var API_KEY = process.env.API_KEY || "";
-var DOWNLOAD_DIR = "/tmp/downloads";
+var DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || "/tmp/downloads";
 var jobs = new Map();
+var processJobs = new Map();
+var processQueue = [];
+var activeProcesses = 0;
+var maxConcurrentProcesses = Math.max(1, Number(process.env.MAX_CONCURRENT_RENDERS || 1));
+var processCleanupTimers = new Map();
 
 if (!fs.existsSync(DOWNLOAD_DIR)) {
   fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
@@ -58,6 +67,9 @@ app.post("/api/download", auth, function(req, res) {
   var endTrim = body.endTrim;
   var maxDuration = body.maxDuration;
 
+  if (assetId !== undefined && (typeof assetId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(assetId))) {
+    return res.status(400).json({ error: "assetId must contain 1–128 letters, numbers, underscores, or hyphens." });
+  }
   if (!sourceUrl) {
     return res.status(400).json({ error: "sourceUrl is required" });
   }
@@ -111,6 +123,183 @@ app.get("/api/file/:filename", auth, function(req, res) {
   res.status(404).json({ error: "File not found", requested: filename });
 });
 
+function publicProcessJob(job) {
+  if (job.status === "completed") {
+    return {
+      jobId: job.jobId,
+      status: job.status,
+      downloadUrl: job.downloadUrl,
+      filename: job.filename,
+      srtPath: job.srtPath || null,
+      durationSeconds: job.durationSeconds,
+      captionWordCount: job.captionWordCount,
+    };
+  }
+  if (job.status === "failed") {
+    return { jobId: job.jobId, status: job.status, error: job.error };
+  }
+  return { jobId: job.jobId, status: job.status, startedAt: job.startedAt };
+}
+
+function scheduleProcessedFileCleanup(jobId, filenames) {
+  const previous = processCleanupTimers.get(jobId);
+  if (previous) clearTimeout(previous);
+  const timer = setTimeout(function() {
+    for (const filename of filenames) {
+      const filePath = path.join(DOWNLOAD_DIR, filename);
+      try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (error) {
+        console.warn("[Process] Cleanup failed for " + filename + ": " + error.message);
+      }
+    }
+    processJobs.delete(jobId);
+    processCleanupTimers.delete(jobId);
+  }, 4 * 60 * 60 * 1000);
+  if (timer.unref) timer.unref();
+  processCleanupTimers.set(jobId, timer);
+}
+
+function startQueuedProcessJobs() {
+  while (activeProcesses < maxConcurrentProcesses && processQueue.length) {
+    const jobId = processQueue.shift();
+    const job = processJobs.get(jobId);
+    if (!job || job.status !== "processing") continue;
+    activeProcesses++;
+
+    const outputFilename = "processed_" + jobId + ".mp4";
+    const outputPath = path.join(DOWNLOAD_DIR, outputFilename);
+    Promise.resolve().then(function() {
+      return processVideo({
+        jobId: jobId,
+        clipPath: path.join(DOWNLOAD_DIR, job.clipFilename),
+        outputPath: outputPath,
+        headline: job.headline,
+        highlightWords: job.highlightWords,
+        musicUrl: job.musicUrl,
+        musicVolumeDb: job.musicVolumeDb,
+      });
+    }).then(function(result) {
+      const srtFilename = result.srtPath ? path.basename(result.srtPath) : null;
+      const completed = {
+        ...job,
+        status: "completed",
+        downloadUrl: "/api/file/" + outputFilename,
+        filename: outputFilename,
+        srtPath: srtFilename ? "/api/file/" + srtFilename : null,
+        durationSeconds: result.durationSeconds,
+        captionWordCount: result.captionWordCount,
+        completedAt: Date.now(),
+      };
+      delete completed.clipFilename;
+      delete completed.headline;
+      delete completed.highlightWords;
+      delete completed.musicUrl;
+      delete completed.musicVolumeDb;
+      processJobs.set(jobId, completed);
+      scheduleProcessedFileCleanup(jobId, [outputFilename, ...(srtFilename ? [srtFilename] : [])]);
+      console.log("[Process] Complete: " + jobId + " -> " + outputFilename);
+    }).catch(function(error) {
+      const message = (error && error.message ? error.message : "Unknown video processing error").slice(0, 900);
+      processJobs.set(jobId, {
+        jobId: jobId,
+        status: "failed",
+        error: message,
+        failedAt: Date.now(),
+      });
+      console.error("[Process] Failed: " + jobId + " - " + message);
+      setTimeout(function() {
+        const current = processJobs.get(jobId);
+        if (current && current.status === "failed") processJobs.delete(jobId);
+      }, 60 * 60 * 1000).unref?.();
+    }).finally(function() {
+      activeProcesses--;
+      startQueuedProcessJobs();
+    });
+  }
+}
+
+app.post("/api/process", auth, function(req, res) {
+  const body = req.body || {};
+  const jobId = body.jobId;
+  const clipFilename = body.clipFilename;
+  const headline = typeof body.headline === "string" ? body.headline.trim() : "";
+  const highlightWords = body.highlightWords;
+  const musicUrl = body.musicUrl == null || body.musicUrl === "" ? null : body.musicUrl;
+
+  if (typeof jobId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/.test(jobId)) {
+    return res.status(400).json({ error: "jobId must contain 1–128 letters, numbers, underscores, or hyphens." });
+  }
+  if (typeof clipFilename !== "string" ||
+      clipFilename !== path.basename(clipFilename) ||
+      !/^[A-Za-z0-9._-]{1,180}$/.test(clipFilename) ||
+      !/\.(mp4|m4v|mov|webm)$/i.test(clipFilename)) {
+    return res.status(400).json({ error: "clipFilename must be the name of a supported video already downloaded to this worker." });
+  }
+  if (!headline || headline.length > 80) {
+    return res.status(400).json({ error: "headline must be between 1 and 80 characters." });
+  }
+  if (!Array.isArray(highlightWords) || highlightWords.length > 10 ||
+      highlightWords.some(function(word) { return typeof word !== "string" || word.length > 60; })) {
+    return res.status(400).json({ error: "highlightWords must be an array of up to 10 strings." });
+  }
+  if (musicUrl !== null && typeof musicUrl !== "string") {
+    return res.status(400).json({ error: "musicUrl must be an HTTP(S) URL or null." });
+  }
+  if (musicUrl !== null) {
+    try {
+      const parsedMusicUrl = new URL(musicUrl);
+      if (!["http:", "https:"].includes(parsedMusicUrl.protocol) || parsedMusicUrl.username || parsedMusicUrl.password) {
+        return res.status(400).json({ error: "musicUrl must be an HTTP(S) URL without embedded credentials." });
+      }
+    } catch (_error) {
+      return res.status(400).json({ error: "musicUrl must be a valid HTTP(S) URL or null." });
+    }
+  }
+  if (body.captionStyle !== "word-by-word") {
+    return res.status(400).json({ error: "captionStyle must be word-by-word." });
+  }
+  if (body.outputAspectRatio !== "9:16") {
+    return res.status(400).json({ error: "outputAspectRatio must be 9:16." });
+  }
+  if (body.musicVolumeDb !== -15) {
+    return res.status(400).json({ error: "musicVolumeDb must be -15." });
+  }
+
+  const existing = processJobs.get(jobId);
+  if (existing && existing.status === "processing") {
+    return res.status(202).json({ jobId: jobId, status: "processing" });
+  }
+  if (existing && existing.status === "completed") {
+    return res.status(200).json({ jobId: jobId, status: "completed" });
+  }
+
+  const clipPath = path.resolve(DOWNLOAD_DIR, clipFilename);
+  if (!clipPath.startsWith(path.resolve(DOWNLOAD_DIR) + path.sep) || !fs.existsSync(clipPath) || !fs.statSync(clipPath).isFile()) {
+    return res.status(404).json({ error: "Downloaded clip was not found on this worker." });
+  }
+
+  processJobs.set(jobId, {
+    jobId: jobId,
+    status: "processing",
+    clipFilename: clipFilename,
+    headline: headline,
+    highlightWords: highlightWords,
+    musicUrl: musicUrl,
+    captionStyle: body.captionStyle,
+    outputAspectRatio: body.outputAspectRatio,
+    musicVolumeDb: body.musicVolumeDb,
+    startedAt: Date.now(),
+  });
+  processQueue.push(jobId);
+  setImmediate(startQueuedProcessJobs);
+  return res.status(202).json({ jobId: jobId, status: "processing" });
+});
+
+app.get("/api/process/status/:jobId", auth, function(req, res) {
+  const job = processJobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ status: "failed", error: "Processing job was not found on this worker." });
+  return res.json(publicProcessJob(job));
+});
+
 app.get("/api/jobs", auth, function(_req, res) {
   var allJobs = [];
   for (var entry of jobs.entries()) {
@@ -126,6 +315,14 @@ function isDirectImage(sourceUrl) {
     if (urlLower.endsWith(imageExts[i])) return true;
   }
   return false;
+}
+
+function isDirectVideo(sourceUrl) {
+  try {
+    return [".mp4", ".m4v", ".mov", ".webm"].includes(path.extname(new URL(sourceUrl).pathname).toLowerCase());
+  } catch (_error) {
+    return false;
+  }
 }
 
 function findOutputFile(assetId) {
@@ -156,7 +353,7 @@ async function processDownload(jobId, params) {
     console.log("[Download] Starting: " + assetId + " - " + sourceUrl);
 
     // Clean up previous attempts
-    var cleanExts = [".mp4", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".part", ".temp.mp4"];
+    var cleanExts = [".mp4", ".m4v", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".part", ".temp.mp4"];
     for (var i = 0; i < cleanExts.length; i++) {
       var p = baseOutput + cleanExts[i];
       if (fs.existsSync(p)) fs.unlinkSync(p);
@@ -169,6 +366,9 @@ async function processDownload(jobId, params) {
       console.log("[Download] Detected image URL, downloading directly: " + assetId);
       outputPath = await downloadDirectFile(assetId, sourceUrl);
       isImage = true;
+    } else if (isDirectVideo(sourceUrl)) {
+      console.log("[Download] Detected direct video URL: " + assetId);
+      outputPath = await downloadDirectVideo(assetId, sourceUrl);
     } else {
       outputPath = await downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDuration);
     }
@@ -236,7 +436,7 @@ async function processDownload(jobId, params) {
       failedAt: Date.now()
     });
 
-    var failExts = [".mp4", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".part", ".temp.mp4"];
+    var failExts = [".mp4", ".m4v", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".part", ".temp.mp4"];
     for (var j = 0; j < failExts.length; j++) {
       var fp = baseOutput + failExts[j];
       if (fs.existsSync(fp)) { try { fs.unlinkSync(fp); } catch (e) {} }
@@ -278,6 +478,55 @@ async function downloadDirectFile(assetId, sourceUrl) {
   fs.writeFileSync(outputPath, buffer);
   console.log("[Download] Image saved: " + outputPath + " (" + buffer.length + " bytes)");
 
+  return outputPath;
+}
+
+async function downloadDirectVideo(assetId, sourceUrl) {
+  const parsedUrl = new URL(sourceUrl);
+  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    throw new Error("Direct video URL must use HTTP or HTTPS.");
+  }
+  const extension = path.extname(parsedUrl.pathname).toLowerCase();
+  const outputPath = path.join(DOWNLOAD_DIR, assetId + extension);
+  const maxBytes = 1024 * 1024 * 1024;
+  const response = await fetch(sourceUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "video/*,*/*"
+    },
+    redirect: "follow",
+    signal: AbortSignal.timeout(300000),
+  });
+  if (!response.ok || !response.body) {
+    await response.body?.cancel();
+    throw new Error("Direct video download failed with HTTP " + response.status + ".");
+  }
+  const declaredLength = Number(response.headers.get("content-length") || 0);
+  if (declaredLength > maxBytes) {
+    await response.body.cancel();
+    throw new Error("Direct video exceeds the 1 GB worker limit.");
+  }
+
+  let bytes = 0;
+  try {
+    await pipeline(
+      Readable.fromWeb(response.body),
+      new Transform({
+        transform(chunk, _encoding, callback) {
+          bytes += chunk.length;
+          callback(bytes > maxBytes ? new Error("Direct video exceeds the 1 GB worker limit.") : null, chunk);
+        }
+      }),
+      fs.createWriteStream(outputPath),
+    );
+  } catch (error) {
+    try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch (_cleanupError) {}
+    throw error;
+  }
+  if (bytes < 100) {
+    try { fs.unlinkSync(outputPath); } catch (_cleanupError) {}
+    throw new Error("Downloaded video is too small to be valid.");
+  }
   return outputPath;
 }
 
