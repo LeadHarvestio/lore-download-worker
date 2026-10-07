@@ -74,6 +74,32 @@ function balance(ctx, tokens, lines, spaceW) {
   return out.every(l => l.width <= maxW + 1) ? out : lines;
 }
 
+// Block Stamp omits punctuation/digits. Normalize fallback runs to its cap height;
+// mixed-font measureText alone under-reports the taller fallback apostrophe.
+function measureWord(ctx, text, size, family) {
+  const primary = `${size}px "${family}", "Anton", sans-serif`;
+  ctx.font = primary;
+  const cap = ctx.measureText("H").actualBoundingBoxAscent;
+  const parts = family === "Block Stamp" ? text.match(/[A-Za-z]+|[^A-Za-z]+/g) || [] : [text];
+  const runs = parts.map(part => {
+    let font = primary;
+    if (family === "Block Stamp" && /[^A-Za-z]/.test(part)) {
+      ctx.font = `${size}px "Anton", sans-serif`;
+      const fallbackCap = ctx.measureText("H").actualBoundingBoxAscent;
+      const glyph = ctx.measureText(part).actualBoundingBoxAscent;
+      const scaled = size * cap / Math.max(fallbackCap, glyph, 1);
+      font = `${scaled}px "Anton", sans-serif`;
+    }
+    ctx.font = font;
+    const m = ctx.measureText(part);
+    return { text: part, font, width: m.width, ascent: m.actualBoundingBoxAscent, descent: Math.max(0, m.actualBoundingBoxDescent) };
+  });
+  ctx.font = primary;
+  return { width: runs.reduce((sum, r) => sum + r.width, 0),
+    actualBoundingBoxAscent: Math.max(0, ...runs.map(r => r.ascent)),
+    actualBoundingBoxDescent: Math.max(0, ...runs.map(r => r.descent)), runs };
+}
+
 export function renderHeadlinePng({ text, highlight, width, height, style }) {
   loadFonts();
   const S = style;
@@ -85,20 +111,31 @@ export function renderHeadlinePng({ text, highlight, width, height, style }) {
 
   const probe = createCanvas(10, 10).getContext("2d");
   let size = width * S.sizePct / 100;
+  const measuring = { measureText: text => measureWord(probe, text, size, family) };
   let lines, tokens = tokenize(text, highlight, S.uppercase), spaceW;
   for (let i = 0; i < 40; i++) {
     probe.font = `${size}px "${family}", "Anton", sans-serif`;
     spaceW = probe.measureText(" ").width * 0.9;
-    lines = wrap(probe, tokens, maxTextW, spaceW);
+    lines = wrap(measuring, tokens, maxTextW, spaceW);
     const widest = Math.max(...lines.map(l => l.width));
     if (lines.length <= S.maxLines && widest <= maxTextW) break;
     size *= 0.94;
   }
-  lines = balance(probe, tokens, lines, spaceW);
+  // Preserve natural reference-style wraps; rebalance only a single orphan word.
+  if (lines.at(-1)?.tokens.length === 1 || lines.at(-1)?.width < Math.max(...lines.map(l => l.width)) * .55) {
+    lines = balance(measuring, tokens, lines, spaceW);
+  }
 
-  const lineH = size * S.lineHeight;
+  const ink = lines.map(line => {
+    const metrics = line.tokens.map(t => measuring.measureText(t.text));
+    return { ascent: Math.max(...metrics.map(m => m.actualBoundingBoxAscent)), descent: Math.max(...metrics.map(m => m.actualBoundingBoxDescent)) };
+  });
+  const ascent = Math.max(...ink.map(m => m.ascent));
+  const descent = Math.max(...ink.map(m => m.descent));
+  const inkH = ascent + descent;
+  const lineH = Math.max(inkH, inkH * S.lineHeight);
   const textW = Math.max(...lines.map(l => l.width));
-  const textH = lineH * lines.length;
+  const textH = inkH + lineH * (lines.length - 1);
   const boxW = textW + padX * 2;
   const boxH = textH + padY * 2;
 
@@ -113,16 +150,24 @@ export function renderHeadlinePng({ text, highlight, width, height, style }) {
     ctx.save();
     ctx.globalAlpha = box.opacity;
     ctx.fillStyle = box.color;
-    roundRect(ctx, bx, by, boxW, boxH, width * box.radiusPct / 100);
-    ctx.fill();
+    if (box.fitLines) {
+      // Overlapping line-sized backgrounds form the tight stepped outline in the reference.
+      ctx.beginPath();
+      lines.forEach((line, li) => {
+        roundRect(ctx, bx + (textW - line.width) / 2, by + li * lineH,
+          line.width + padX * 2, inkH + padY * 2, width * box.radiusPct / 100, false);
+      });
+      ctx.fill();
+    } else {
+      roundRect(ctx, bx, by, boxW, boxH, width * box.radiusPct / 100);
+      ctx.fill();
+    }
     ctx.restore();
   }
 
   ctx.font = `${size}px "${family}", "Anton", sans-serif`;
   ctx.textBaseline = "alphabetic";
   ctx.lineJoin = "round";
-  const metrics = ctx.measureText("H");
-  const capH = metrics.actualBoundingBoxAscent;
 
   // Draw the text in layered passes: glow, shadow, stroke, fill.
   const passes = [];
@@ -134,32 +179,40 @@ export function renderHeadlinePng({ text, highlight, width, height, style }) {
   for (const pass of passes) {
     lines.forEach((line, li) => {
       let x = bx + padX + (textW - line.width) / 2;
-      // center cap-height inside the line box
-      const y = by + padY + li * lineH + (lineH + capH) / 2;
+      const y = by + padY + li * lineH + ascent;
       line.tokens.forEach((tk, ti) => {
         const color = tk.hl ? S.highlightColor : S.textColor;
-        const w = ctx.measureText(tk.text).width;
+        const measured = measureWord(ctx, tk.text, size, family);
+        const paint = mode => {
+          let rx = x;
+          for (const run of measured.runs) {
+            ctx.font = run.font;
+            ctx[mode](run.text, rx, y);
+            rx += run.width;
+          }
+        };
+        const w = measured.width;
         ctx.save();
         if (pass === "glow") {
           // highlighted words glow in the glow color; others get a softer white-ish halo only if glow.color set
           ctx.shadowColor = tk.hl ? S.glow.color : hexA(S.glow.color, 0.0);
           ctx.shadowBlur = width * S.glow.blurPct / 100;
           ctx.fillStyle = color;
-          for (let k = 0; k < S.glow.strength; k++) ctx.fillText(tk.text, x, y);
+          for (let k = 0; k < S.glow.strength; k++) paint("fillText");
         } else if (pass === "shadow") {
           ctx.shadowColor = hexA(S.shadow.color, S.shadow.opacity);
           ctx.shadowBlur = width * S.shadow.blurPct / 100;
           ctx.shadowOffsetX = width * S.shadow.offsetXPct / 100;
           ctx.shadowOffsetY = width * S.shadow.offsetYPct / 100;
           ctx.fillStyle = color;
-          ctx.fillText(tk.text, x, y);
+          paint("fillText");
         } else if (pass === "stroke") {
           ctx.strokeStyle = S.stroke.color;
           ctx.lineWidth = width * S.stroke.widthPct / 100 * 2;
-          ctx.strokeText(tk.text, x, y);
+          paint("strokeText");
         } else {
           ctx.fillStyle = color;
-          ctx.fillText(tk.text, x, y);
+          paint("fillText");
         }
         ctx.restore();
         x += w + spaceW;
@@ -167,12 +220,13 @@ export function renderHeadlinePng({ text, highlight, width, height, style }) {
     });
   }
 
-  return { buffer: canvas.toBuffer("image/png"), width: cw, height: ch, lines: lines.length, fontSize: size };
+  return { buffer: canvas.toBuffer("image/png"), width: cw, height: ch, lines: lines.length, fontSize: size,
+    visibleBox: { x: bx, y: by, width: boxW, height: boxH }, lineAdvance: lineH, inkHeight: inkH };
 }
 
-function roundRect(ctx, x, y, w, h, r) {
+function roundRect(ctx, x, y, w, h, r, startPath = true) {
   r = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
+  if (startPath) ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
   ctx.arcTo(x + w, y + h, x, y + h, r);

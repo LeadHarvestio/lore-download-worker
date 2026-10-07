@@ -14,13 +14,14 @@ const baseHeadline = {
   font: "Block Stamp",
   sizePct: 8.2,          // font size as % of frame width
   uppercase: true,
-  lineHeight: 1.08,
-  maxWidthPct: 86,       // max text block width (incl. box padding) as % of frame width
+  lineHeight: 1.06,      // spacing relative to visible glyph height, not unused font em space
+  maxWidthPct: 99,       // reference nearly fills the frame horizontally
   maxLines: 4,
   textColor: "#000000",
   highlightColor: "#E11010",
   yPct: 24,              // vertical CENTER of the headline block, % of frame height
-  box: { enabled: true, color: "#FFFFFF", opacity: 1, radiusPct: 3.2, padXPct: 4.2, padYPct: 2.2 },
+  autoPosition: true,    // use unused blurfit space; explicit manual positioning remains available
+  box: { enabled: true, fitLines: true, color: "#FFFFFF", opacity: 1, radiusPct: 1.2, padXPct: 1.2, padYPct: 1.0 },
   stroke: { enabled: false, color: "#000000", widthPct: 0.5 },
   shadow: { enabled: false, color: "#000000", opacity: 0.45, blurPct: 1.2, offsetXPct: 0, offsetYPct: 0.5 },
   glow:   { enabled: false, color: "#FFFFFF", blurPct: 2.5, strength: 2 },
@@ -52,7 +53,7 @@ export const PRESETS = {
     id: "boxed_red",
     name: "Boxed Red",
     layout: "blurfit",
-    headline: { ...baseHeadline, sizePct: 7.6, maxLines: 3, yPct: 60 },
+    headline: { ...baseHeadline, sizePct: 10, maxLines: 3, yPct: 24 },
     caption: { ...baseCaption, highlightColor: "#FFE600", yPct: 80 },
   },
   // Reference 3: no box, wide heavy font, white + magenta, glow
@@ -90,7 +91,11 @@ export const PRESETS = {
 // Deep-merge user overrides (from the DB / UI) over a preset.
 export function resolveStyle(presetId, overrides = {}) {
   const base = PRESETS[presetId] || PRESETS.boxed_red;
-  return deepMerge(structuredClone(base), overrides || {});
+  const result = deepMerge(structuredClone(base), overrides || {});
+  if (overrides?.headline?.yPct !== undefined && overrides.headline.autoPosition === undefined) {
+    result.headline.autoPosition = false;
+  }
+  return result;
 }
 
 function deepMerge(target, src) {

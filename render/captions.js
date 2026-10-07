@@ -70,6 +70,7 @@ export function buildAss({ words, width, height, style }) {
     chunk.forEach((w, wi) => {
       const start = wi === 0 ? chunk[0].start : w.start;
       let end = chunk[wi + 1] ? chunk[wi + 1].start : Math.min(w.end + 0.18, nextChunkStart);
+      if (end <= 0) return; // seeking a preview must not revive earlier caption events
       if (end <= start) end = start + 0.12;
 
       const label = (s) => (S.uppercase ? s.toUpperCase() : s);
