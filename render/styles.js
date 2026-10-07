@@ -7,10 +7,11 @@ export const FONTS = {
   "Anton":        { family: "Anton",        file: "Anton-Regular.ttf" },
   "Archivo Black":{ family: "Archivo Black",file: "ArchivoBlack-Regular.ttf" },
   "Bebas Neue":   { family: "Bebas Neue",   file: "BebasNeue-Regular.ttf" },
+  "Block Stamp":  { family: "Block Stamp",  file: "BlockStamp-Regular.ttf" },
 };
 
 const baseHeadline = {
-  font: "Anton",
+  font: "Block Stamp",
   sizePct: 8.2,          // font size as % of frame width
   uppercase: true,
   lineHeight: 1.08,
@@ -61,7 +62,7 @@ export const PRESETS = {
     layout: "blurfit",
     headline: {
       ...baseHeadline,
-      font: "Archivo Black",
+      font: "Block Stamp",
       sizePct: 17,
       lineHeight: 1.0,
       maxLines: 3,

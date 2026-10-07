@@ -7,6 +7,7 @@ import { lookup } from "dns/promises";
 import { isIP } from "net";
 import { fileURLToPath } from "url";
 import { processClip, resolveStyle } from "./render/process.js";
+import { censorWords, expletiveRanges } from "./render/censorship.js";
 
 const execFileAsync = promisify(execFile);
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -247,12 +248,15 @@ export async function processVideo({
   stylePresetId = "boxed_red",
   styleOverrides = {},
   words: providedWords = null,
+  censorCaptions = false,
+  muteExpletives = false,
   transcribeWords = transcribeVideo,
 }) {
   if (typeof musicVolumeDb !== "number" || musicVolumeDb < -30 || musicVolumeDb > -5) {
     throw new Error("Music volume must be between -30 dB and -5 dB.");
   }
   validateStyleInput(stylePresetId, styleOverrides);
+  if (typeof censorCaptions !== "boolean" || typeof muteExpletives !== "boolean") throw new Error("Censorship settings must be booleans.");
   if (!fs.existsSync(clipPath) || !fs.statSync(clipPath).isFile()) {
     throw new Error("The downloaded clip is missing from the worker.");
   }
@@ -272,7 +276,10 @@ export async function processVideo({
   try {
     const rawWords = Array.isArray(providedWords) ? cleanProvidedWords(providedWords) : await transcribeWords(clipPath);
     const words = normalizeWords(rawWords, probe.durationSeconds);
-    if (words.length) fs.writeFileSync(srtPath, buildSrt(words), "utf8");
+    // Raw words remain the canonical cache. Only display/export copies are masked.
+    const captionWords = censorCaptions ? censorWords(words) : words;
+    const muteRanges = muteExpletives ? expletiveRanges(words, probe.durationSeconds) : [];
+    if (words.length) fs.writeFileSync(srtPath, buildSrt(captionWords), "utf8");
     if (musicUrl) await fetchMusicFile(musicUrl, musicPath);
 
     const style = resolveStyle(stylePresetId, styleOverrides);
@@ -282,7 +289,8 @@ export async function processVideo({
         outputPath,
         workDir,
         headline: { text: normalizedHeadline, highlight: highlights },
-        words: toRenderWords(words),
+        words: toRenderWords(captionWords),
+        muteRanges,
         style,
         musicPath,
         musicDb: musicVolumeDb,
@@ -303,6 +311,7 @@ export async function processVideo({
       durationSeconds: outputProbe.durationSeconds,
       captionWordCount: words.length,
       words: toRenderWords(words),
+      censorship: { version: 1, captions: censorCaptions, audio: muteExpletives },
     };
   } finally {
     fs.rmSync(workDir, { recursive: true, force: true });
@@ -316,7 +325,7 @@ export async function processVideo({
 }
 
 /** One-frame PNG of the style, for the Review page live preview. */
-export async function previewFrame({ clipPath = null, outputPath, workDir, headline, highlightWords, words, stylePresetId, styleOverrides, at = 0 }) {
+export async function previewFrame({ clipPath = null, outputPath, workDir, headline, highlightWords, words, stylePresetId, styleOverrides, at = 0, censorCaptions = false }) {
   validateStyleInput(stylePresetId, styleOverrides);
   fs.mkdirSync(workDir, { recursive: true });
   let input = clipPath;
@@ -339,7 +348,7 @@ export async function previewFrame({ clipPath = null, outputPath, workDir, headl
     outputPath,
     workDir,
     headline: { text: safeText(headline, 80) || "Streamer does something unhinged on stream", highlight: highlightWords || [] },
-    words: sample,
+    words: censorCaptions ? censorWords(sample) : sample,
     style,
     previewAt: Number.isFinite(at) ? at : 0,
   });
