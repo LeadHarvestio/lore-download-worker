@@ -10,7 +10,7 @@ Railway worker for downloading source clips and rendering review-ready vertical 
 - `WHISPER_MODEL` — faster-whisper model name, defaulting to `base`.
 - `MAX_CONCURRENT_RENDERS` — simultaneous renders, defaulting to `1`.
 
-The Docker image installs FFmpeg, DejaVu fonts, yt-dlp, and faster-whisper. Whisper downloads its selected model the first time it is used.
+The Docker image installs FFmpeg, fontconfig, the bundled Anton / Archivo Black / Bebas Neue fonts, yt-dlp, and faster-whisper. Whisper downloads its selected model the first time it is used.
 
 ## Download API
 
@@ -35,13 +35,41 @@ The Docker image installs FFmpeg, DejaVu fonts, yt-dlp, and faster-whisper. Whis
 }
 ```
 
-`musicUrl` may be `null`. The worker validates the source video, transcribes it with word timestamps, renders a 1080×1920 MP4 with the headline bar and lower-third captions, and mixes optional music below the source audio.
+`musicUrl` may be `null`. The worker validates the source video, transcribes it with word timestamps (faster-whisper), renders a 1080×1920 MP4 with a styled headline and word-by-word captions, and mixes optional music below the source audio.
+
+### Style fields (all optional — old requests still work)
+
+```json
+{
+  "stylePresetId": "boxed_red",
+  "styleOverrides": { "headline": { "yPct": 30 }, "caption": { "highlightColor": "#FFE600" } },
+  "words": [{ "word": "these", "start": 0.3, "end": 0.7 }],
+  "musicVolumeDb": -15
+}
+```
+
+- `stylePresetId` — `boxed_red` (default), `glow_magenta`, or `cyan_pop`. See `render/styles.js` for every setting (fonts, sizes, colors, box, stroke, shadow, glow, positions, words per caption chunk).
+- `styleOverrides` — nested object deep-merged over the preset.
+- `words` — cached word timestamps from a previous render. When present, Whisper is skipped, so restyling is fast.
+- `musicVolumeDb` — −30 to −5, default −15.
+- Use a **new `jobId` for every render**. Re-sending a completed `jobId` returns the old result without re-rendering.
+- A `404` from `POST /api/process` means the downloaded clip is no longer on the worker (kept 24 h); re-download it and retry.
+- `highlightWords` entries may be single words or multi-word phrases.
 
 - `GET /api/process/status/:jobId` returns `processing`, `completed`, or `failed`.
-- Completed jobs include `filename`, `downloadUrl`, and `srtPath` when word captions are available. Fetch the MP4 and optional SRT through `GET /api/file/:filename`.
+- Completed jobs include `filename`, `downloadUrl`, `words` (the word timestamps used — store them to restyle without re-transcribing), and `srtPath` when word captions are available. Fetch the MP4 and optional SRT through `GET /api/file/:filename`.
 - Failed jobs include an `error` string so the app can offer a retry.
 
 Health checks use unauthenticated `GET /health`. Debug, download, render, status, and file routes retain Bearer-token protection whenever `API_KEY` is set.
+
+## Style API
+
+- `GET /api/styles` returns `{ presets, fonts }`; build the style editor from it.
+- `POST /api/preview` returns a PNG of one frame. Body: `{ stylePresetId, styleOverrides, headline, highlightWords, words?, clipFilename?, at? }`. Omit `clipFilename` for a blank background. Typically 1–3 s.
+
+## Adding a font
+
+Drop a `.ttf` in `fonts/`, add it to `FONTS` in `render/styles.js` (`family` must be the font's internal family name), redeploy.
 
 ## Local checks
 

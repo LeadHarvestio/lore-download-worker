@@ -7,7 +7,9 @@ import crypto from "crypto";
 import { Readable, Transform } from "stream";
 import { pipeline } from "stream/promises";
 import { fileURLToPath } from "url";
-import { processVideo } from "./video-processor.js";
+import os from "os";
+import { processVideo, previewFrame, validateStyleInput } from "./video-processor.js";
+import { PRESETS, FONTS } from "./render/styles.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
@@ -133,6 +135,7 @@ function publicProcessJob(job) {
       srtPath: job.srtPath || null,
       durationSeconds: job.durationSeconds,
       captionWordCount: job.captionWordCount,
+      words: job.words || null,
     };
   }
   if (job.status === "failed") {
@@ -176,6 +179,9 @@ function startQueuedProcessJobs() {
         highlightWords: job.highlightWords,
         musicUrl: job.musicUrl,
         musicVolumeDb: job.musicVolumeDb,
+        stylePresetId: job.stylePresetId,
+        styleOverrides: job.styleOverrides,
+        words: job.words,
       });
     }).then(function(result) {
       const srtFilename = result.srtPath ? path.basename(result.srtPath) : null;
@@ -187,6 +193,7 @@ function startQueuedProcessJobs() {
         srtPath: srtFilename ? "/api/file/" + srtFilename : null,
         durationSeconds: result.durationSeconds,
         captionWordCount: result.captionWordCount,
+        words: result.words,
         completedAt: Date.now(),
       };
       delete completed.clipFilename;
@@ -194,6 +201,8 @@ function startQueuedProcessJobs() {
       delete completed.highlightWords;
       delete completed.musicUrl;
       delete completed.musicVolumeDb;
+      delete completed.stylePresetId;
+      delete completed.styleOverrides;
       processJobs.set(jobId, completed);
       scheduleProcessedFileCleanup(jobId, [outputFilename, ...(srtFilename ? [srtFilename] : [])]);
       console.log("[Process] Complete: " + jobId + " -> " + outputFilename);
@@ -254,14 +263,27 @@ app.post("/api/process", auth, function(req, res) {
       return res.status(400).json({ error: "musicUrl must be a valid HTTP(S) URL or null." });
     }
   }
-  if (body.captionStyle !== "word-by-word") {
+  if (body.captionStyle !== undefined && body.captionStyle !== "word-by-word") {
     return res.status(400).json({ error: "captionStyle must be word-by-word." });
   }
-  if (body.outputAspectRatio !== "9:16") {
+  if (body.outputAspectRatio !== undefined && body.outputAspectRatio !== "9:16") {
     return res.status(400).json({ error: "outputAspectRatio must be 9:16." });
   }
-  if (body.musicVolumeDb !== -15) {
-    return res.status(400).json({ error: "musicVolumeDb must be -15." });
+  const musicVolumeDb = body.musicVolumeDb === undefined ? -15 : body.musicVolumeDb;
+  if (typeof musicVolumeDb !== "number" || !(musicVolumeDb >= -30 && musicVolumeDb <= -5)) {
+    return res.status(400).json({ error: "musicVolumeDb must be a number between -30 and -5." });
+  }
+  const stylePresetId = body.stylePresetId || "boxed_red";
+  if (!PRESETS[stylePresetId]) {
+    return res.status(400).json({ error: "stylePresetId must be one of: " + Object.keys(PRESETS).join(", ") });
+  }
+  const styleOverrides = body.styleOverrides === undefined || body.styleOverrides === null ? {} : body.styleOverrides;
+  try { validateStyleInput(stylePresetId, styleOverrides); } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  if (body.words !== undefined && body.words !== null &&
+      (!Array.isArray(body.words) || body.words.length > 3000)) {
+    return res.status(400).json({ error: "words must be an array of up to 3000 {word,start,end} items." });
   }
 
   const existing = processJobs.get(jobId);
@@ -284,9 +306,10 @@ app.post("/api/process", auth, function(req, res) {
     headline: headline,
     highlightWords: highlightWords,
     musicUrl: musicUrl,
-    captionStyle: body.captionStyle,
-    outputAspectRatio: body.outputAspectRatio,
-    musicVolumeDb: body.musicVolumeDb,
+    musicVolumeDb: musicVolumeDb,
+    stylePresetId: stylePresetId,
+    styleOverrides: styleOverrides,
+    words: Array.isArray(body.words) ? body.words : null,
     startedAt: Date.now(),
   });
   processQueue.push(jobId);
@@ -298,6 +321,45 @@ app.get("/api/process/status/:jobId", auth, function(req, res) {
   const job = processJobs.get(req.params.jobId);
   if (!job) return res.status(404).json({ status: "failed", error: "Processing job was not found on this worker." });
   return res.json(publicProcessJob(job));
+});
+
+app.get("/api/styles", auth, function(_req, res) {
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS) });
+});
+
+// Synchronous one-frame PNG of a style, for the Review page live preview.
+app.post("/api/preview", auth, async function(req, res) {
+  const body = req.body || {};
+  const workDir = path.join(os.tmpdir(), "preview-" + crypto.randomUUID());
+  try {
+    let clipPath = null;
+    if (body.clipFilename) {
+      const name = String(body.clipFilename);
+      const resolved = path.resolve(DOWNLOAD_DIR, name);
+      if (name !== path.basename(name) || !resolved.startsWith(path.resolve(DOWNLOAD_DIR) + path.sep) || !fs.existsSync(resolved)) {
+        return res.status(404).json({ error: "Downloaded clip was not found on this worker." });
+      }
+      clipPath = resolved;
+    }
+    const presetId = body.stylePresetId || "boxed_red";
+    if (!PRESETS[presetId]) return res.status(400).json({ error: "Unknown stylePresetId." });
+    fs.mkdirSync(workDir, { recursive: true });
+    const out = path.join(workDir, "preview.png");
+    await previewFrame({
+      clipPath, outputPath: out, workDir,
+      headline: typeof body.headline === "string" ? body.headline : "",
+      highlightWords: Array.isArray(body.highlightWords) ? body.highlightWords.slice(0, 10).map(String) : [],
+      words: Array.isArray(body.words) ? body.words.slice(0, 200) : null,
+      stylePresetId: presetId,
+      styleOverrides: body.styleOverrides || {},
+      at: Number(body.at) || 0,
+    });
+    res.type("png").send(fs.readFileSync(out));
+  } catch (error) {
+    res.status(500).json({ error: String(error.stderr || error.message || "preview failed").slice(0, 500) });
+  } finally {
+    fs.rm(workDir, { recursive: true, force: true }, function() {});
+  }
 });
 
 app.get("/api/jobs", auth, function(_req, res) {
@@ -420,7 +482,7 @@ async function processDownload(jobId, params) {
     setTimeout(function() {
       try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch (e) {}
       jobs.delete(jobId);
-    }, 4 * 60 * 60 * 1000);
+    }, 24 * 60 * 60 * 1000);
 
   } catch (error) {
     var errMsg = error.stderr

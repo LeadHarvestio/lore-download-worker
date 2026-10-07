@@ -253,3 +253,50 @@ test("renderer mixes source audio with background music while preserving the ver
   assert.deepEqual({ width: video.width, height: video.height }, { width: 1080, height: 1920 });
   assert.ok(probe.streams.some((stream) => stream.codec_type === "audio"));
 });
+
+test("style presets: renders every preset, honours overrides, and returns cached-word-compatible output", { timeout: 240_000 }, async (t) => {
+  const tempDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "lore-worker-style-"));
+  t.after(async () => fs.promises.rm(tempDirectory, { recursive: true, force: true }));
+  const clipPath = path.join(tempDirectory, "source.mp4");
+  await makeFixtureVideo(clipPath);
+  const { processVideo, previewFrame } = await import("./video-processor.js");
+  const words = [
+    { word: "KAI", start: 0.1, end: 0.4 },
+    { word: "GOT", start: 0.5, end: 0.8 },
+    { word: "ROASTED", start: 0.9, end: 1.5 },
+  ];
+
+  for (const presetId of ["boxed_red", "glow_magenta", "cyan_pop"]) {
+    const outputPath = path.join(tempDirectory, `${presetId}.mp4`);
+    const result = await processVideo({
+      jobId: `style-${presetId}`,
+      clipPath,
+      outputPath,
+      headline: "Kai gets roasted by chat",
+      highlightWords: ["Kai", "roasted"],
+      stylePresetId: presetId,
+      styleOverrides: { headline: { yPct: 30 }, caption: { highlightColor: "#FFE600" } },
+      words,
+    });
+    assert.equal(result.captionWordCount, 3);
+    assert.equal(result.words.length, 3, "cached words are returned for restyles");
+    const probe = JSON.parse((await execFileAsync(process.env.FFPROBE_BIN || "ffprobe", [
+      "-v", "error", "-show_entries", "stream=codec_type,width,height", "-of", "json", outputPath,
+    ])).stdout);
+    const video = probe.streams.find((stream) => stream.codec_type === "video");
+    assert.deepEqual({ width: video.width, height: video.height }, { width: 1080, height: 1920 });
+  }
+
+  const pngPath = path.join(tempDirectory, "preview.png");
+  await previewFrame({
+    clipPath: null, outputPath: pngPath, workDir: path.join(tempDirectory, "pv"),
+    headline: "No Clover!", highlightWords: ["Clover"], stylePresetId: "glow_magenta", styleOverrides: {}, at: 0,
+  });
+  const png = await fs.promises.readFile(pngPath);
+  assert.equal(png.subarray(1, 4).toString(), "PNG");
+
+  await assert.rejects(
+    processVideo({ jobId: "bad-db", clipPath, outputPath: path.join(tempDirectory, "bad.mp4"), headline: "X", highlightWords: [], musicVolumeDb: 5, words }),
+    /Music volume/,
+  );
+});

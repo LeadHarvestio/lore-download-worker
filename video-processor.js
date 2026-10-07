@@ -6,13 +6,13 @@ import { promisify } from "util";
 import { lookup } from "dns/promises";
 import { isIP } from "net";
 import { fileURLToPath } from "url";
+import { processClip, resolveStyle } from "./render/process.js";
 
 const execFileAsync = promisify(execFile);
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const MAX_MUSIC_BYTES = 100 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 const TRANSCRIBE_TIMEOUT_MS = 14 * 60 * 1000;
-const FFMPEG_TIMEOUT_MS = 14 * 60 * 1000;
 
 function safeText(value, limit = 500) {
   return String(value ?? "")
@@ -77,69 +77,6 @@ function buildSrt(words) {
     word.text.replace(/[\r\n]+/g, " "),
     "",
   ].join("\n")).join("\n");
-}
-
-function wrapHeadline(headline, maxLineLength = 22) {
-  const tokens = headline.split(/\s+/).filter(Boolean);
-  const lines = [];
-  let line = "";
-  for (const token of tokens) {
-    if (line && `${line} ${token}`.length > maxLineLength) {
-      lines.push(line);
-      line = token;
-    } else {
-      line = line ? `${line} ${token}` : token;
-    }
-  }
-  if (line) lines.push(line);
-  return lines.length ? lines : ["STREAMER CLIP"];
-}
-
-function buildHeadlineAss(lines, highlightWords) {
-  const highlights = new Set(
-    highlightWords.flatMap((word) => String(word).match(/[\p{L}\p{N}]+/gu) || [])
-      .map(normalizeToken)
-      .filter(Boolean),
-  );
-  return lines.map((line) => line.split(/(\s+)/).map((part) => {
-    if (/^\s+$/.test(part)) return part;
-    const isHighlighted = (part.match(/[\p{L}\p{N}]+/gu) || [])
-      .some((word) => highlights.has(normalizeToken(word)));
-    const text = escapeAss(part);
-    return isHighlighted ? `{\\c&H0000FF&}${text}{\\c&HFFFFFF&}` : text;
-  }).join("")).join("\\N");
-}
-
-function buildAss(headline, highlightWords, words, durationSeconds) {
-  const title = safeText(headline, 80).toLocaleUpperCase("en-US") || "STREAMER CLIP";
-  const headlineLines = wrapHeadline(title);
-  const headlineText = buildHeadlineAss(headlineLines, highlightWords);
-  const events = [
-    `Dialogue: 0,0:00:00.00,${assTimestamp(durationSeconds)},Headline,,0,0,0,,${headlineText}`,
-  ];
-  for (const word of words) {
-    events.push(
-      `Dialogue: 1,${assTimestamp(word.start)},${assTimestamp(word.end)},Caption,,0,0,0,,${escapeAss(word.text)}`,
-    );
-  }
-  return [
-    "[Script Info]",
-    "ScriptType: v4.00+",
-    "WrapStyle: 2",
-    "ScaledBorderAndShadow: yes",
-    "PlayResX: 1080",
-    "PlayResY: 1920",
-    "",
-    "[V4+ Styles]",
-    "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
-    "Style: Headline,DejaVu Sans,72,&H00FFFFFF,&H0000FFFF,&H00101010,&H00000000,-1,0,0,0,100,100,0,0,1,3,2,8,42,42,54,1",
-    "Style: Caption,DejaVu Sans,76,&H00FFFFFF,&H0000FFFF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,5,2,2,80,80,330,1",
-    "",
-    "[Events]",
-    "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
-    ...events,
-    "",
-  ].join("\n");
 }
 
 function isPrivateAddress(address) {
@@ -277,6 +214,27 @@ async function transcribeVideo(clipPath) {
   return data.words;
 }
 
+export function validateStyleInput(presetId, overrides) {
+  if (presetId !== undefined && typeof presetId !== "string") throw new Error("stylePresetId must be a string.");
+  if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
+    throw new Error("styleOverrides must be an object.");
+  }
+}
+
+function toRenderWords(words) {
+  return words.map((w) => ({ word: w.text, start: w.start, end: w.end }));
+}
+
+function cleanProvidedWords(input) {
+  if (!Array.isArray(input) || input.length > 3000) throw new Error("words must be an array of up to 3000 items.");
+  return input.map((w) => ({ text: w?.text ?? w?.word, start: w?.start, end: w?.end }));
+}
+
+/**
+ * Render a finished short. Backwards compatible with the original contract; new optional inputs:
+ *  - stylePresetId / styleOverrides : look of the headline + captions (see render/styles.js)
+ *  - words                          : cached [{word,start,end}] so restyles skip Whisper
+ */
 export async function processVideo({
   jobId,
   clipPath,
@@ -286,9 +244,15 @@ export async function processVideo({
   musicUrl = null,
   musicFilePath = null,
   musicVolumeDb = -15,
+  stylePresetId = "boxed_red",
+  styleOverrides = {},
+  words: providedWords = null,
   transcribeWords = transcribeVideo,
 }) {
-  if (musicVolumeDb !== -15) throw new Error("Music volume must be -15 dB.");
+  if (typeof musicVolumeDb !== "number" || musicVolumeDb < -30 || musicVolumeDb > -5) {
+    throw new Error("Music volume must be between -30 dB and -5 dB.");
+  }
+  validateStyleInput(stylePresetId, styleOverrides);
   if (!fs.existsSync(clipPath) || !fs.statSync(clipPath).isFile()) {
     throw new Error("The downloaded clip is missing from the worker.");
   }
@@ -296,68 +260,32 @@ export async function processVideo({
   if (musicUrl && musicFilePath) throw new Error("Use either a music URL or a local music file.");
 
   const probe = await probeVideo(clipPath);
-  const normalizedHeadline = safeText(headline, 80).toLocaleUpperCase("en-US") || "STREAMER CLIP";
+  const normalizedHeadline = safeText(headline, 80) || "STREAMER CLIP";
   const highlights = Array.isArray(highlightWords)
     ? highlightWords.map((word) => safeText(word, 60)).filter(Boolean).slice(0, 10)
     : [];
-  const assPath = path.join(path.dirname(outputPath), `.${jobId}.captions.ass`);
   const srtPath = path.join(path.dirname(outputPath), `${jobId}.srt`);
+  const workDir = path.join(os.tmpdir(), `render-${jobId}-${Date.now()}`);
   const musicPath = musicFilePath || (musicUrl ? path.join(os.tmpdir(), `${jobId}-${Date.now()}.music`) : null);
   let succeeded = false;
 
   try {
-    const rawWords = await transcribeWords(clipPath);
+    const rawWords = Array.isArray(providedWords) ? cleanProvidedWords(providedWords) : await transcribeWords(clipPath);
     const words = normalizeWords(rawWords, probe.durationSeconds);
-    fs.writeFileSync(assPath, buildAss(normalizedHeadline, highlights, words, probe.durationSeconds), "utf8");
     if (words.length) fs.writeFileSync(srtPath, buildSrt(words), "utf8");
     if (musicUrl) await fetchMusicFile(musicUrl, musicPath);
 
-    const fontDirectory = process.env.FONT_DIR || "/usr/share/fonts/truetype/dejavu";
-    const videoFilter = [
-      "scale=1080:1920:force_original_aspect_ratio=increase",
-      "crop=1080:1920",
-      "setsar=1",
-      "drawbox=x=0:y=0:w=iw:h=270:color=black@0.58:t=fill",
-      `subtitles=filename=${assPath}:fontsdir=${fontDirectory}`,
-    ].join(",");
-    const args = ["-y", "-i", clipPath];
-    if (musicPath) args.push("-stream_loop", "-1", "-i", musicPath);
-    args.push("-vf", videoFilter, "-map", "0:v:0");
-
-    if (musicPath && probe.hasAudio) {
-      const duration = probe.durationSeconds.toFixed(3);
-      args.push(
-        "-filter_complex",
-        `[0:a:0]apad=whole_dur=${duration}[source];[1:a:0]volume=${musicVolumeDb}dB,atrim=duration=${duration}[music];[source][music]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95[aout]`,
-        "-map", "[aout]",
-      );
-    } else if (musicPath) {
-      const duration = probe.durationSeconds.toFixed(3);
-      args.push(
-        "-filter_complex",
-        `[1:a:0]volume=${musicVolumeDb}dB,atrim=duration=${duration},alimiter=limit=0.95[aout]`,
-        "-map", "[aout]",
-      );
-    } else {
-      args.push("-map", "0:a:0?");
-    }
-
-    args.push(
-      "-t", probe.durationSeconds.toFixed(3),
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-crf", "20",
-      "-pix_fmt", "yuv420p",
-      "-c:a", "aac",
-      "-b:a", "192k",
-      "-movflags", "+faststart",
-      outputPath,
-    );
-
+    const style = resolveStyle(stylePresetId, styleOverrides);
     try {
-      await execFileAsync(process.env.FFMPEG_BIN || "ffmpeg", args, {
-        timeout: FFMPEG_TIMEOUT_MS,
-        maxBuffer: 8 * 1024 * 1024,
+      await processClip({
+        inputPath: clipPath,
+        outputPath,
+        workDir,
+        headline: { text: normalizedHeadline, highlight: highlights },
+        words: toRenderWords(words),
+        style,
+        musicPath,
+        musicDb: musicVolumeDb,
       });
     } catch (error) {
       const detail = safeText(error?.stderr || error?.message || "unknown FFmpeg error", 700);
@@ -374,15 +302,45 @@ export async function processVideo({
       srtPath: words.length ? srtPath : null,
       durationSeconds: outputProbe.durationSeconds,
       captionWordCount: words.length,
+      words: toRenderWords(words),
     };
   } finally {
-    for (const temporaryPath of [assPath, ...(musicUrl ? [musicPath] : [])]) {
-      if (temporaryPath && fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
-    }
+    fs.rmSync(workDir, { recursive: true, force: true });
+    if (musicUrl && musicPath && fs.existsSync(musicPath)) fs.unlinkSync(musicPath);
     if (!succeeded) {
       for (const temporaryPath of [outputPath, srtPath]) {
         if (temporaryPath && fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
       }
     }
   }
+}
+
+/** One-frame PNG of the style, for the Review page live preview. */
+export async function previewFrame({ clipPath = null, outputPath, workDir, headline, highlightWords, words, stylePresetId, styleOverrides, at = 0 }) {
+  validateStyleInput(stylePresetId, styleOverrides);
+  fs.mkdirSync(workDir, { recursive: true });
+  let input = clipPath;
+  if (!input) {
+    input = path.join(workDir, "blank.mp4");
+    await execFileAsync(process.env.FFMPEG_BIN || "ffmpeg", [
+      "-y", "-loglevel", "error", "-f", "lavfi",
+      "-i", "color=c=0x2a3140:size=720x1280:rate=30:duration=2", "-pix_fmt", "yuv420p", input,
+    ], { timeout: 30_000 });
+  }
+  const style = resolveStyle(stylePresetId, {
+    ...(styleOverrides || {}),
+    caption: { ...((styleOverrides || {}).caption || {}), pop: false },
+  });
+  const sample = Array.isArray(words) && words.length
+    ? words.map((w) => ({ word: w.word ?? w.text, start: w.start, end: w.end }))
+    : [{ word: "THESE", start: 0, end: 0.6 }, { word: "WORDS", start: 0.6, end: 1.2 }];
+  await processClip({
+    inputPath: input,
+    outputPath,
+    workDir,
+    headline: { text: safeText(headline, 80) || "Streamer does something unhinged on stream", highlight: highlightWords || [] },
+    words: sample,
+    style,
+    previewAt: Number.isFinite(at) ? at : 0,
+  });
 }
