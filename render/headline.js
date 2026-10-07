@@ -11,6 +11,7 @@ export function loadFonts() {
   if (fontsLoaded) return;
   for (const f of Object.values(FONTS)) {
     const ok = GlobalFonts.registerFromPath(path.join(FONT_DIR, f.file), f.family);
+    if (!ok && f.family === "Block Stamp") throw new Error("Block Stamp font could not be registered. Check fonts/BlockStamp-Regular.ttf.");
     if (!ok) console.warn("[fonts] failed to register " + f.file);
   }
   fontsLoaded = true;
@@ -86,7 +87,7 @@ export function renderHeadlinePng({ text, highlight, width, height, style }) {
   let size = width * S.sizePct / 100;
   let lines, tokens = tokenize(text, highlight, S.uppercase), spaceW;
   for (let i = 0; i < 40; i++) {
-    probe.font = `${size}px "${family}"`;
+    probe.font = `${size}px "${family}", "Anton", sans-serif`;
     spaceW = probe.measureText(" ").width * 0.9;
     lines = wrap(probe, tokens, maxTextW, spaceW);
     const widest = Math.max(...lines.map(l => l.width));
@@ -117,7 +118,7 @@ export function renderHeadlinePng({ text, highlight, width, height, style }) {
     ctx.restore();
   }
 
-  ctx.font = `${size}px "${family}"`;
+  ctx.font = `${size}px "${family}", "Anton", sans-serif`;
   ctx.textBaseline = "alphabetic";
   ctx.lineJoin = "round";
   const metrics = ctx.measureText("H");

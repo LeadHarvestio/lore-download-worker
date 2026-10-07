@@ -5,6 +5,7 @@ import path from "path";
 import { renderHeadlinePng, FONT_DIR } from "./headline.js";
 import { buildAss } from "./captions.js";
 import { resolveStyle } from "./styles.js";
+import { muteVolumeFilter } from "./censorship.js";
 
 const run = promisify(execFile);
 export const OUT_W = 1080, OUT_H = 1920, FPS = 30;
@@ -77,7 +78,7 @@ export async function processClip(p) {
   if (!preview) {
     if (info.hasAudio) {
       try { voiceWav = await normalizeAudio(p.inputPath, path.join(p.workDir, "voice.wav")); }
-      catch (e) { console.warn("[render] source audio unreadable, continuing without it: " + String(e.stderr || e.message).slice(0, 200)); }
+      catch (e) { throw new Error("Source audio could not be decoded: " + String(e.stderr || e.message).slice(0, 200)); }
     }
     if (p.musicPath) {
       try { musicWav = await normalizeAudio(p.musicPath, path.join(p.workDir, "music.wav")); }
@@ -100,13 +101,16 @@ export async function processClip(p) {
   ];
 
   const STEREO = "aformat=sample_rates=44100:channel_layouts=stereo";
+  // Muting is applied only to the normalized voice, before mixing music.
+  const mute = muteVolumeFilter(p.muteRanges || []);
+  const voiceFilters = `loudnorm=I=-16:TP=-1.5:LRA=11,${STEREO}${mute ? "," + mute : ""}`;
   let mapAudio = [];
   if (!preview) {
     const gain = typeof p.musicDb === "number" ? p.musicDb : -15;
     const fadeOutAt = Math.max(0, dur - 1).toFixed(2);
     const music = `[${musicIdx}:a]atrim=0:${dur.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=${fadeOutAt}:d=1`;
     if (musicWav && voiceWav) {
-      f.push(`[${voiceIdx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,${STEREO}[voice]`);
+      f.push(`[${voiceIdx}:a]${voiceFilters}[voice]`);
       f.push(`${music},volume=${gain}dB,${STEREO}[mus]`);
       f.push(`[voice][mus]amix=inputs=2:duration=first:dropout_transition=0,volume=2,alimiter=limit=0.95,${STEREO}[outa]`);
       mapAudio = ["-map", "[outa]"];
@@ -114,7 +118,7 @@ export async function processClip(p) {
       f.push(`${music},volume=${gain + 9}dB,${STEREO}[outa]`);
       mapAudio = ["-map", "[outa]"];
     } else if (voiceWav) {
-      f.push(`[${voiceIdx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,${STEREO}[outa]`);
+      f.push(`[${voiceIdx}:a]${voiceFilters}[outa]`);
       mapAudio = ["-map", "[outa]"];
     }
   }

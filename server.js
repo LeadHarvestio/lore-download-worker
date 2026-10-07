@@ -136,6 +136,7 @@ function publicProcessJob(job) {
       durationSeconds: job.durationSeconds,
       captionWordCount: job.captionWordCount,
       words: job.words || null,
+      censorship: job.censorship,
     };
   }
   if (job.status === "failed") {
@@ -182,6 +183,8 @@ function startQueuedProcessJobs() {
         stylePresetId: job.stylePresetId,
         styleOverrides: job.styleOverrides,
         words: job.words,
+        censorCaptions: job.censorCaptions,
+        muteExpletives: job.muteExpletives,
       });
     }).then(function(result) {
       const srtFilename = result.srtPath ? path.basename(result.srtPath) : null;
@@ -194,6 +197,7 @@ function startQueuedProcessJobs() {
         durationSeconds: result.durationSeconds,
         captionWordCount: result.captionWordCount,
         words: result.words,
+        censorship: result.censorship,
         completedAt: Date.now(),
       };
       delete completed.clipFilename;
@@ -285,6 +289,9 @@ app.post("/api/process", auth, function(req, res) {
       (!Array.isArray(body.words) || body.words.length > 3000)) {
     return res.status(400).json({ error: "words must be an array of up to 3000 {word,start,end} items." });
   }
+  for (const key of ["censorCaptions", "muteExpletives"]) {
+    if (body[key] !== undefined && typeof body[key] !== "boolean") return res.status(400).json({ error: key + " must be a boolean." });
+  }
 
   const existing = processJobs.get(jobId);
   if (existing && existing.status === "processing") {
@@ -310,6 +317,8 @@ app.post("/api/process", auth, function(req, res) {
     stylePresetId: stylePresetId,
     styleOverrides: styleOverrides,
     words: Array.isArray(body.words) ? body.words : null,
+    censorCaptions: body.censorCaptions ?? false,
+    muteExpletives: body.muteExpletives ?? false,
     startedAt: Date.now(),
   });
   processQueue.push(jobId);
@@ -324,12 +333,13 @@ app.get("/api/process/status/:jobId", auth, function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS) });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), capabilities: { censorship: 1 } });
 });
 
 // Synchronous one-frame PNG of a style, for the Review page live preview.
 app.post("/api/preview", auth, async function(req, res) {
   const body = req.body || {};
+  if (body.censorCaptions !== undefined && typeof body.censorCaptions !== "boolean") return res.status(400).json({ error: "censorCaptions must be a boolean." });
   const workDir = path.join(os.tmpdir(), "preview-" + crypto.randomUUID());
   try {
     let clipPath = null;
@@ -350,11 +360,12 @@ app.post("/api/preview", auth, async function(req, res) {
       headline: typeof body.headline === "string" ? body.headline : "",
       highlightWords: Array.isArray(body.highlightWords) ? body.highlightWords.slice(0, 10).map(String) : [],
       words: Array.isArray(body.words) ? body.words.slice(0, 200) : null,
+      censorCaptions: body.censorCaptions ?? false,
       stylePresetId: presetId,
       styleOverrides: body.styleOverrides || {},
       at: Number(body.at) || 0,
     });
-    res.type("png").send(fs.readFileSync(out));
+    res.set("X-Censorship-Captions", String(body.censorCaptions ?? false)).type("png").send(fs.readFileSync(out));
   } catch (error) {
     res.status(500).json({ error: String(error.stderr || error.message || "preview failed").slice(0, 500) });
   } finally {
