@@ -17,6 +17,15 @@ export async function probe(file) {
   return { width: v?.width, height: v?.height, duration: parseFloat(j.format.duration) || 0, hasAudio: !!a };
 }
 
+// Convert any audio (5.1, 5.1(side), quad, mono, unknown layout...) to plain stereo 44.1 kHz WAV
+// so the filter graph never has to negotiate an unusual channel layout.
+async function normalizeAudio(src, dest) {
+  await run(process.env.FFMPEG_BIN || "ffmpeg",
+    ["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vn", "-map", "0:a:0", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", dest],
+    { timeout: 5 * 60 * 1000, maxBuffer: 10 * 1024 * 1024 });
+  return dest;
+}
+
 function esc(p) { return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'"); }
 
 function layoutFilter(layout) {
@@ -63,11 +72,25 @@ export async function processClip(p) {
   const secs = style.headline.seconds;
   const enable = secs ? `:enable='between(t,0,${secs})'` : "";
 
+  // Clean stereo copies of the source audio and the music (see normalizeAudio)
+  let voiceWav = null, musicWav = null;
+  if (!preview) {
+    if (info.hasAudio) {
+      try { voiceWav = await normalizeAudio(p.inputPath, path.join(p.workDir, "voice.wav")); }
+      catch (e) { console.warn("[render] source audio unreadable, continuing without it: " + String(e.stderr || e.message).slice(0, 200)); }
+    }
+    if (p.musicPath) {
+      try { musicWav = await normalizeAudio(p.musicPath, path.join(p.workDir, "music.wav")); }
+      catch (e) { throw new Error("Music file could not be decoded: " + String(e.stderr || e.message).slice(0, 200)); }
+    }
+  }
+
   const args = ["-y", "-hide_banner", "-loglevel", "error"];
   if (preview) args.push("-ss", String(p.previewAt));
   args.push("-i", p.inputPath, "-loop", "1", "-t", String(dur), "-i", hlPath);
-  const useMusic = !preview && p.musicPath;
-  if (useMusic) args.push("-stream_loop", "-1", "-i", p.musicPath);
+  let nextIdx = 2, musicIdx = null, voiceIdx = null;
+  if (musicWav) { args.push("-stream_loop", "-1", "-i", musicWav); musicIdx = nextIdx++; }
+  if (voiceWav) { args.push("-i", voiceWav); voiceIdx = nextIdx++; }
 
   const f = [
     layoutFilter(style.layout),
@@ -76,19 +99,22 @@ export async function processClip(p) {
     `[withhl]ass='${esc(assPath)}':fontsdir='${esc(FONT_DIR)}',format=yuv420p[outv]`,
   ];
 
+  const STEREO = "aformat=sample_rates=44100:channel_layouts=stereo";
   let mapAudio = [];
   if (!preview) {
     const gain = typeof p.musicDb === "number" ? p.musicDb : -15;
-    if (useMusic && info.hasAudio) {
-      f.push(`[0:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100[voice]`);
-      f.push(`[2:a]atrim=0:${dur.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=${Math.max(0, dur - 1).toFixed(2)}:d=1,volume=${gain}dB,aresample=44100[mus]`);
-      f.push(`[voice][mus]amix=inputs=2:duration=first:dropout_transition=0,volume=2,alimiter=limit=0.95[outa]`);
+    const fadeOutAt = Math.max(0, dur - 1).toFixed(2);
+    const music = `[${musicIdx}:a]atrim=0:${dur.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=${fadeOutAt}:d=1`;
+    if (musicWav && voiceWav) {
+      f.push(`[${voiceIdx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,${STEREO}[voice]`);
+      f.push(`${music},volume=${gain}dB,${STEREO}[mus]`);
+      f.push(`[voice][mus]amix=inputs=2:duration=first:dropout_transition=0,volume=2,alimiter=limit=0.95,${STEREO}[outa]`);
       mapAudio = ["-map", "[outa]"];
-    } else if (useMusic) {
-      f.push(`[2:a]atrim=0:${dur.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=${Math.max(0, dur - 1).toFixed(2)}:d=1,volume=${gain + 9}dB,aresample=44100[outa]`);
+    } else if (musicWav) {
+      f.push(`${music},volume=${gain + 9}dB,${STEREO}[outa]`);
       mapAudio = ["-map", "[outa]"];
-    } else if (info.hasAudio) {
-      f.push(`[0:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100[outa]`);
+    } else if (voiceWav) {
+      f.push(`[${voiceIdx}:a]loudnorm=I=-16:TP=-1.5:LRA=11,${STEREO}[outa]`);
       mapAudio = ["-map", "[outa]"];
     }
   }
@@ -98,7 +124,7 @@ export async function processClip(p) {
     args.push("-frames:v", "1", p.outputPath);
   } else {
     args.push("-t", dur.toFixed(2), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", p.outputPath);
+      "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "192k", "-movflags", "+faststart", p.outputPath);
   }
 
   await run(process.env.FFMPEG_BIN || "ffmpeg", args, { timeout: 10 * 60 * 1000, maxBuffer: 20 * 1024 * 1024 });
