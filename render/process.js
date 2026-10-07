@@ -6,6 +6,7 @@ import { renderHeadlinePng, FONT_DIR } from "./headline.js";
 import { buildAss } from "./captions.js";
 import { resolveStyle } from "./styles.js";
 import { muteVolumeFilter } from "./censorship.js";
+import { headlinePosition, previewWords } from "./placement.js";
 
 const run = promisify(execFile);
 export const OUT_W = 1080, OUT_H = 1920, FPS = 30;
@@ -63,15 +64,17 @@ export async function processClip(p) {
   const hlPath = path.join(p.workDir, "headline.png");
   fs.writeFileSync(hlPath, hl.buffer);
 
-  const assText = buildAss({ words: p.words || [], width: OUT_W, height: OUT_H, style: style.caption });
+  const preview = typeof p.previewAt === "number";
+  const assWords = preview ? previewWords(p.words || [], p.previewAt) : p.words || [];
+  const assText = buildAss({ words: assWords, width: OUT_W, height: OUT_H, style: style.caption });
   const assPath = path.join(p.workDir, "captions.ass");
   fs.writeFileSync(assPath, assText);
 
-  const preview = typeof p.previewAt === "number";
   const dur = preview ? 1 : info.duration;
-  const yTop = `${(style.headline.yPct / 100).toFixed(4)}*H-h/2`;
+  const yTop = headlinePosition({ sourceWidth: info.width, sourceHeight: info.height,
+    width: OUT_W, height: OUT_H, headline: hl, style });
   const secs = style.headline.seconds;
-  const enable = secs ? `:enable='between(t,0,${secs})'` : "";
+  const enable = secs ? `:enable='between(t,0,${secs - (preview ? p.previewAt : 0)})'` : "";
 
   // Clean stereo copies of the source audio and the music (see normalizeAudio)
   let voiceWav = null, musicWav = null;
@@ -86,7 +89,8 @@ export async function processClip(p) {
     }
   }
 
-  const args = ["-y", "-hide_banner", "-loglevel", "error"];
+  // Bound filter threading: concurrent PNG previews otherwise exhaust worker resources.
+  const args = ["-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1"];
   if (preview) args.push("-ss", String(p.previewAt));
   args.push("-i", p.inputPath, "-loop", "1", "-t", String(dur), "-i", hlPath);
   let nextIdx = 2, musicIdx = null, voiceIdx = null;
@@ -125,7 +129,7 @@ export async function processClip(p) {
 
   args.push("-filter_complex", f.join(";"), "-map", "[outv]", ...mapAudio);
   if (preview) {
-    args.push("-frames:v", "1", p.outputPath);
+    args.push("-frames:v", "1", "-threads", "1", p.outputPath);
   } else {
     args.push("-t", dur.toFixed(2), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "192k", "-movflags", "+faststart", p.outputPath);

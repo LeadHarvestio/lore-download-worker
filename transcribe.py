@@ -9,7 +9,7 @@ def main():
     if len(sys.argv) != 2:
         raise SystemExit("Usage: transcribe.py <video-file>")
 
-    model_name = os.environ.get("WHISPER_MODEL", "base")
+    model_name = os.environ.get("WHISPER_MODEL", "small.en")
     cpu_threads = max(1, int(os.environ.get("WHISPER_CPU_THREADS", "4")))
     model = WhisperModel(
         model_name,
@@ -20,7 +20,10 @@ def main():
     segments, _info = model.transcribe(
         sys.argv[1],
         word_timestamps=True,
-        vad_filter=True,
+        # Overlapping streamer voices/game audio are often discarded by VAD.
+        vad_filter=False,
+        language="en" if model_name.endswith(".en") else None,
+        beam_size=5,
         condition_on_previous_text=False,
     )
 
