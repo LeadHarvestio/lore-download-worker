@@ -1,5 +1,22 @@
 # Output quality
 
+## Source editing
+
+The styles catalog advertises `capabilities.sourceEditing: 1`. Presets expose
+`source: { cropLeftPct, cropRightPct, cropTopPct, cropBottomPct, zoom, muteAudio }`.
+Each edge crop defaults to 0% and accepts 0–40%; zoom defaults to 1 and accepts
+1–3; original audio defaults to unmuted. Inputs are validated.
+
+In blurfit, crop trims the source before splitting into blurred and sharp copies.
+Zoom enlarges only the sharp foreground and clips it at the output frame.
+Automatic headline placement tracks the edited foreground bounds. Fill ignores
+crop/zoom but respects original-audio muting. The same editing applies to
+1080p PNG previews and 4K finished MP4s.
+
+Original-audio muting silences only the source's rendered voice channel, not
+music or transcription. Raw source audio and cached words remain available for
+unmuting/restyling. Existing finished files require an explicit re-render.
+
 New finished cuts render at **2160 × 3840 (vertical 4K), 30 fps**, using
 browser-compatible H.264/yuv420p video and AAC audio. Lower-resolution source
 footage is upscaled; no extra native source detail is recovered by upscaling.

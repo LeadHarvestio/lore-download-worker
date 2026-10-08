@@ -7,6 +7,7 @@ import { buildAss } from "./captions.js";
 import { resolveStyle } from "./styles.js";
 import { muteVolumeFilter } from "./censorship.js";
 import { headlinePosition, previewWords } from "./placement.js";
+import { layoutFilter, sourceSettings } from "./framing.js";
 
 const run = promisify(execFile);
 export const OUT_W = 2160, OUT_H = 3840, FPS = 30;
@@ -31,19 +32,6 @@ async function normalizeAudio(src, dest) {
 
 function esc(p) { return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'"); }
 
-function layoutFilter(layout, width, height) {
-  if (layout === "fill") {
-    return `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,fps=${FPS}[base]`;
-  }
-  // blurfit: blurred, darkened copy fills the frame; sharp source centred on top
-  return [
-    `[0:v]split=2[va][vb]`,
-    `[va]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=${Math.round(40 * width / PREVIEW_W)}:6,eq=brightness=-0.12:saturation=1.1[bg]`,
-    `[vb]scale=${width}:${height}:force_original_aspect_ratio=decrease,setsar=1[fg]`,
-    `[bg][fg]overlay=(W-w)/2:(H-h)/2,fps=${FPS}[base]`,
-  ].join(";");
-}
-
 /**
  * @param {object} p
  * @param p.inputPath      downloaded source clip
@@ -59,6 +47,7 @@ function layoutFilter(layout, width, height) {
 export async function processClip(p) {
   const info = await probe(p.inputPath);
   const style = p.style;
+  const source = sourceSettings(style.source);
   const preview = typeof p.previewAt === "number";
   const width = preview ? PREVIEW_W : OUT_W;
   const height = preview ? PREVIEW_H : OUT_H;
@@ -101,7 +90,7 @@ export async function processClip(p) {
   if (voiceWav) { args.push("-i", voiceWav); voiceIdx = nextIdx++; }
 
   const f = [
-    layoutFilter(style.layout, width, height),
+    layoutFilter(style.layout, width, height, info.width, info.height, source),
     `[1:v]format=rgba[hl]`,
     `[base][hl]overlay=x=(W-w)/2:y=${yTop}${enable}[withhl]`,
     `[withhl]ass='${esc(assPath)}':fontsdir='${esc(FONT_DIR)}',format=yuv420p[outv]`,
@@ -110,7 +99,7 @@ export async function processClip(p) {
   const STEREO = "aformat=sample_rates=44100:channel_layouts=stereo";
   // Muting is applied only to the normalized voice, before mixing music.
   const mute = muteVolumeFilter(p.muteRanges || []);
-  const voiceFilters = `loudnorm=I=-16:TP=-1.5:LRA=11,${STEREO}${mute ? "," + mute : ""}`;
+  const voiceFilters = `loudnorm=I=-16:TP=-1.5:LRA=11,${STEREO}${mute ? "," + mute : ""}${source.muteAudio ? ",volume=0" : ""}`;
   let mapAudio = [];
   if (!preview) {
     const gain = typeof p.musicDb === "number" ? p.musicDb : -15;

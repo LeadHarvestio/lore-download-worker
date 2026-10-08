@@ -89,9 +89,13 @@ export const PRESETS = {
 };
 
 // Deep-merge user overrides (from the DB / UI) over a preset.
+import { sourceSettings } from "./framing.js";
+for (const preset of Object.values(PRESETS)) preset.source = sourceSettings();
+
 export function resolveStyle(presetId, overrides = {}) {
   const base = PRESETS[presetId] || PRESETS.boxed_red;
   const result = deepMerge(structuredClone(base), overrides || {});
+  result.source = sourceSettings(result.source);
   if (overrides?.headline?.yPct !== undefined && overrides.headline.autoPosition === undefined) {
     result.headline.autoPosition = false;
   }

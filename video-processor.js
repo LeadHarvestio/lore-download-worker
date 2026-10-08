@@ -8,6 +8,7 @@ import { isIP } from "net";
 import { fileURLToPath } from "url";
 import { processClip, resolveStyle, OUT_W, OUT_H } from "./render/process.js";
 import { censorWords, expletiveRanges } from "./render/censorship.js";
+import { sourceSettings } from "./render/framing.js";
 
 const execFileAsync = promisify(execFile);
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -220,6 +221,7 @@ export function validateStyleInput(presetId, overrides) {
   if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
     throw new Error("styleOverrides must be an object.");
   }
+  if (overrides?.source !== undefined) sourceSettings(overrides.source);
 }
 
 function toRenderWords(words) {
