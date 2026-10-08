@@ -22,6 +22,11 @@ RUN npm install --production
 COPY server.js video-processor.js transcribe.py ./
 COPY render ./render
 COPY fonts ./fonts
+COPY download ./download
+
+# Refresh the extractor after source changes; the earlier "latest" layer can be cached.
+RUN curl --fail --location --retry 2 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp && yt-dlp --version
 
 # make the bundled headline/caption fonts visible to fontconfig too
 RUN mkdir -p /usr/local/share/fonts/clip && cp fonts/*.ttf /usr/local/share/fonts/clip/ && fc-cache -f
