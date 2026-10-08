@@ -81,8 +81,8 @@ test("original-audio toggle silences voice, can be reversed, and preserves music
         highlightWords: [], musicFilePath, styleOverrides: { source: { muteAudio, ...(musicFilePath ? { cropLeftPct: 10, cropBottomPct: 10, zoom: 1.25 } : {}) }, layout: musicFilePath ? "blurfit" : "fill" },
         words: [{ word: "caption", start: 0.05, end: 0.3 }] });
       assert.equal(result.words[0].word, "caption", "Caption transcription survives original-audio muting");
-      assert.equal(result.outputWidth, 2160);
-      assert.equal(result.outputHeight, 3840);
+      assert.equal(result.outputWidth, 1080);
+      assert.equal(result.outputHeight, 1920);
       const data = execFileSync("ffmpeg", ["-v", "error", "-i", output, "-map", "0:a:0", "-f", "f32le", "-ac", "1", "-ar", "44100", "-"]);
       const samples = new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4);
       return Math.sqrt(samples.reduce((sum, v) => sum + v * v, 0) / samples.length);
