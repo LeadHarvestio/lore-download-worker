@@ -12,6 +12,9 @@ import { processVideo, previewFrame, validateStyleInput } from "./video-processo
 import { PRESETS, FONTS } from "./render/styles.js";
 import { OUT_W, OUT_H, FPS, PREVIEW_W, PREVIEW_H } from "./render/process.js";
 import { transcriptionAudio } from "./render/transcription-audio.js";
+import { createDownloadQueue } from "./download/queue.js";
+import { downloadErrorMessage } from "./download/errors.js";
+import { resolveTikTokVideoUrl } from "./download/tiktok.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
@@ -20,6 +23,16 @@ app.use(express.json());
 var API_KEY = process.env.API_KEY || "";
 var DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || "/tmp/downloads";
 var jobs = new Map();
+var downloadQueue = createDownloadQueue({
+  concurrency: 2,
+  run: processDownload,
+  onStart: function(jobId) {
+    jobs.set(jobId, { ...jobs.get(jobId), status: "downloading", startedAt: Date.now() });
+  },
+  onError: function(jobId, error) {
+    jobs.set(jobId, { ...jobs.get(jobId), status: "failed", error: downloadErrorMessage(error), failedAt: Date.now() });
+  },
+});
 var processJobs = new Map();
 var processQueue = [];
 var activeProcesses = 0;
@@ -79,17 +92,15 @@ app.post("/api/download", auth, function(req, res) {
   }
 
   var jobId = crypto.randomUUID();
-  jobs.set(jobId, { status: "downloading", assetId: assetId, sourceUrl: sourceUrl, startedAt: Date.now() });
-
-  res.json({ jobId: jobId, status: "downloading" });
-
-  processDownload(jobId, {
+  jobs.set(jobId, { status: "queued", assetId: assetId, sourceUrl: sourceUrl, queuedAt: Date.now() });
+  downloadQueue.enqueue(jobId, {
     assetId: assetId || jobId,
     sourceUrl: sourceUrl,
     startTrim: startTrim,
     endTrim: endTrim,
     maxDuration: maxDuration || 300
   });
+  res.json({ jobId: jobId, status: jobs.get(jobId).status, queuePosition: downloadQueue.position(jobId) });
 });
 
 app.get("/api/status/:jobId", auth, function(req, res) {
@@ -97,7 +108,7 @@ app.get("/api/status/:jobId", auth, function(req, res) {
   if (!job) {
     return res.status(404).json({ error: "Job not found" });
   }
-  res.json(job);
+  res.json({ ...job, queuePosition: downloadQueue.position(req.params.jobId) });
 });
 
 app.get("/api/file/:filename", auth, function(req, res) {
@@ -361,7 +372,7 @@ app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, transcriptionAudio: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2 } });
 });
 
 // Synchronous one-frame PNG of a style, for the Review page live preview.
@@ -432,7 +443,7 @@ function findOutputFile(assetId) {
   try {
     var files = fs.readdirSync(DOWNLOAD_DIR);
     for (var i = 0; i < files.length; i++) {
-      if (files[i].startsWith(assetId) && !files[i].endsWith(".part") && !files[i].endsWith(".json")) {
+      if (files[i].startsWith(assetId + ".") && [".mp4", ".m4v", ".mov", ".webm", ".mkv", ".jpg", ".jpeg", ".png", ".webp", ".gif"].includes(path.extname(files[i]).toLowerCase())) {
         return path.join(DOWNLOAD_DIR, files[i]);
       }
     }
@@ -454,7 +465,7 @@ async function processDownload(jobId, params) {
     console.log("[Download] Starting: " + assetId + " - " + sourceUrl);
 
     // Clean up previous attempts
-    var cleanExts = [".mp4", ".m4v", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".part", ".temp.mp4"];
+    var cleanExts = [".mp4", ".m4v", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".part", ".mp4.part", ".webm.part", ".m4a.part", ".ytdl", ".temp.mp4"];
     for (var i = 0; i < cleanExts.length; i++) {
       var p = baseOutput + cleanExts[i];
       if (fs.existsSync(p)) fs.unlinkSync(p);
@@ -480,10 +491,7 @@ async function processDownload(jobId, params) {
     }
 
     if (!outputPath || !fs.existsSync(outputPath)) {
-      // List what IS in the directory for debugging
-      var dirFiles = [];
-      try { dirFiles = fs.readdirSync(DOWNLOAD_DIR); } catch (e) {}
-      throw new Error("No output file found. Files in dir: " + dirFiles.join(", "));
+      throw new Error("The downloader finished without a usable video file.");
     }
 
     var stats = fs.statSync(outputPath);
@@ -524,9 +532,7 @@ async function processDownload(jobId, params) {
     }, 24 * 60 * 60 * 1000);
 
   } catch (error) {
-    var errMsg = error.stderr
-      ? error.stderr.slice(0, 500)
-      : error.message || "Unknown error";
+    var errMsg = downloadErrorMessage(error);
 
     console.error("[Download] Failed: " + assetId + " - " + errMsg);
 
@@ -537,7 +543,7 @@ async function processDownload(jobId, params) {
       failedAt: Date.now()
     });
 
-    var failExts = [".mp4", ".m4v", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".part", ".temp.mp4"];
+    var failExts = [".mp4", ".m4v", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".part", ".mp4.part", ".webm.part", ".m4a.part", ".ytdl", ".temp.mp4"];
     for (var j = 0; j < failExts.length; j++) {
       var fp = baseOutput + failExts[j];
       if (fs.existsSync(fp)) { try { fs.unlinkSync(fp); } catch (e) {} }
@@ -632,6 +638,7 @@ async function downloadDirectVideo(assetId, sourceUrl) {
 }
 
 async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDuration) {
+  sourceUrl = await resolveTikTokVideoUrl(sourceUrl);
   var outputTemplate = path.join(DOWNLOAD_DIR, assetId + ".%(ext)s");
   var expectedMp4 = path.join(DOWNLOAD_DIR, assetId + ".mp4");
 
@@ -642,6 +649,8 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
     "--retries", "3",
     "--socket-timeout", "30",
     "--no-warnings",
+    "--downloader-args", "ffmpeg_o:-threads 2 -filter_threads 1 -filter_complex_threads 1",
+    "--postprocessor-args", "ffmpeg_o:-threads 2 -filter_threads 1 -filter_complex_threads 1",
     "-o", outputTemplate
   ];
 
@@ -664,9 +673,8 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
     });
     if (result.stdout) console.log("[yt-dlp] stdout: " + result.stdout.slice(0, 500));
   } catch (err) {
-    // yt-dlp might exit non-zero but still produce a file
-    console.log("[yt-dlp] Process error (may still have output): " + (err.message || "").slice(0, 200));
-    if (err.stderr) console.log("[yt-dlp] stderr: " + err.stderr.slice(0, 500));
+    // A .part or partially written MP4 is not a successful download.
+    throw new Error(downloadErrorMessage(err));
   }
 
   // Check for the expected .mp4 file
@@ -685,15 +693,14 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
       try {
         await execFileAsync("ffmpeg", [
           "-i", found,
-          "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+          "-c:v", "libx264", "-preset", "fast", "-crf", "22", "-threads", "2", "-filter_threads", "1",
           "-c:a", "aac", "-b:a", "192k",
           "-y", convertedPath
         ], { timeout: 120000 });
         fs.unlinkSync(found);
         return convertedPath;
       } catch (convertErr) {
-        console.log("[yt-dlp] MP4 conversion failed, keeping original: " + convertErr.message);
-        return found;
+        throw new Error("Downloaded video could not be converted to MP4: " + downloadErrorMessage(convertErr));
       }
     }
 
@@ -704,7 +711,7 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
 }
 
 var PORT = process.env.PORT || 3001;
-app.listen(PORT, "0.0.0.0", function() {
-  console.log("Download worker running on port " + PORT);
+var listeningServer = app.listen(PORT, "0.0.0.0", function() {
+  console.log("Download worker running on port " + listeningServer.address().port);
   console.log("Auth: " + (API_KEY ? "enabled" : "disabled (set API_KEY env var to enable)"));
 });
