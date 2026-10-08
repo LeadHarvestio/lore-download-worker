@@ -700,6 +700,11 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
     "-o", outputTemplate
   ];
 
+  if (new URL(sourceUrl).hostname === "www.tiktok.com") {
+    args.push("--impersonate", "chrome", "--user-agent",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+  }
+
   if (startTrim !== undefined && endTrim !== undefined && endTrim > startTrim) {
     args.push("--download-sections", "*" + startTrim + "-" + endTrim);
     args.push("--force-keyframes-at-cuts");
@@ -753,7 +758,7 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
     return found;
   }
 
-  return null;
+  throw new Error("Downloader reported success but no playable video file was produced for this clip.");
 }
 
 var PORT = process.env.PORT || 3001;

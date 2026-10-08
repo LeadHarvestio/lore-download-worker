@@ -24,9 +24,14 @@ COPY render ./render
 COPY fonts ./fonts
 COPY download ./download
 
-# Refresh the extractor after source changes; the earlier "latest" layer can be cached.
-RUN curl --fail --location --retry 2 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && \
-    chmod a+rx /usr/local/bin/yt-dlp && yt-dlp --version
+# Refresh after source changes: the earlier "latest" installation layer can be cached.
+RUN case "$(uname -m)" in \
+      x86_64) YT_DLP_ASSET=yt-dlp_linux ;; \
+      aarch64|arm64) YT_DLP_ASSET=yt-dlp_linux_aarch64 ;; \
+      *) echo "Unsupported worker architecture"; exit 1 ;; \
+    esac && \
+    curl --fail --location --retry 2 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$YT_DLP_ASSET" -o /usr/local/bin/yt-dlp && \
+    chmod a+rx /usr/local/bin/yt-dlp && yt-dlp --version && yt-dlp --list-impersonate-targets
 
 # make the bundled headline/caption fonts visible to fontconfig too
 RUN mkdir -p /usr/local/share/fonts/clip && cp fonts/*.ttf /usr/local/share/fonts/clip/ && fc-cache -f
