@@ -116,3 +116,9 @@ Run `npm test` to exercise the authenticated download-to-render flow against a g
 `POST /api/download` accepts the entire batch. Downloads use a FIFO queue with two active jobs; a failed job releases its slot and the remaining jobs continue automatically. `GET /api/status/:jobId` reports `queued` and `queuePosition` while waiting, then `downloading`, `completed`, or `failed`. Clients must not count queue waiting toward their active-download timeout. Publish the compatible app before merging this worker change.
 
 TikTok share links are resolved only through approved HTTPS TikTok hosts and normalized to full `www.tiktok.com/@creator/video/id` URLs. The build refreshes yt-dlp after source changes to avoid an old cached extractor. TikTok restrictions can still prevent downloads; errors remain visible rather than being replaced by a directory listing. Downloader and conversion failures are not treated as successful partial files.
+
+## Render batches
+
+Renders have a separate FIFO queue (one active render by default). Accepted jobs report `queued`, `queuedAt`, and their current `queuePosition`; `processing` and `startedAt` are set only when rendering begins. Duplicate submissions with the same queued/running job ID reuse that job. Clients should allow queue waiting separately and start their active-render timeout from `startedAt`. Cached Scribe words remain reusable on recovery and retries.
+
+`GET /api/process/queue` returns active/waiting render counts and the configured limit. Authenticated `GET /api/jobs` lists both download and render jobs with a `kind` field, so deployment readiness checks cover both workloads. Verify both app flags, `downloadQueueWaitSupported` and `renderQueueWaitSupported`, before merging this worker update.
