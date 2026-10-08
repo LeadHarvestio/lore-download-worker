@@ -155,7 +155,10 @@ function publicProcessJob(job) {
   if (job.status === "failed") {
     return { jobId: job.jobId, status: job.status, error: job.error };
   }
-  return { jobId: job.jobId, status: job.status, startedAt: job.startedAt };
+  return {
+    jobId: job.jobId, status: job.status, queuedAt: job.queuedAt, startedAt: job.startedAt,
+    queuePosition: job.status === "queued" ? processQueue.indexOf(job.jobId) + 1 : null,
+  };
 }
 
 function scheduleProcessedFileCleanup(jobId, filenames) {
@@ -179,8 +182,10 @@ function startQueuedProcessJobs() {
   while (activeProcesses < maxConcurrentProcesses && processQueue.length) {
     const jobId = processQueue.shift();
     const job = processJobs.get(jobId);
-    if (!job || job.status !== "processing") continue;
+    if (!job || job.status !== "queued") continue;
     activeProcesses++;
+    job.status = "processing";
+    job.startedAt = Date.now();
 
     const outputFilename = "processed_" + jobId + ".mp4";
     const outputPath = path.join(DOWNLOAD_DIR, outputFilename);
@@ -309,8 +314,8 @@ app.post("/api/process", auth, function(req, res) {
   }
 
   const existing = processJobs.get(jobId);
-  if (existing && existing.status === "processing") {
-    return res.status(202).json({ jobId: jobId, status: "processing" });
+  if (existing && (existing.status === "queued" || existing.status === "processing")) {
+    return res.status(202).json(publicProcessJob(existing));
   }
   if (existing && existing.status === "completed") {
     return res.status(200).json({ jobId: jobId, status: "completed" });
@@ -323,7 +328,7 @@ app.post("/api/process", auth, function(req, res) {
 
   processJobs.set(jobId, {
     jobId: jobId,
-    status: "processing",
+    status: "queued",
     clipFilename: clipFilename,
     headline: headline,
     highlightWords: highlightWords,
@@ -334,11 +339,15 @@ app.post("/api/process", auth, function(req, res) {
     words: Array.isArray(body.words) ? body.words : null,
     censorCaptions: body.censorCaptions ?? false,
     muteExpletives: body.muteExpletives ?? false,
-    startedAt: Date.now(),
+    queuedAt: Date.now(),
   });
   processQueue.push(jobId);
   setImmediate(startQueuedProcessJobs);
-  return res.status(202).json({ jobId: jobId, status: "processing" });
+  return res.status(202).json(publicProcessJob(processJobs.get(jobId)));
+});
+
+app.get("/api/process/queue", auth, function(_req, res) {
+  res.json({ active: activeProcesses, queued: processQueue.length, limit: maxConcurrentProcesses });
 });
 
 app.get("/api/process/status/:jobId", auth, function(req, res) {
@@ -372,7 +381,7 @@ app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses } });
 });
 
 // Synchronous one-frame PNG of a style, for the Review page live preview.
@@ -415,7 +424,10 @@ app.post("/api/preview", auth, async function(req, res) {
 app.get("/api/jobs", auth, function(_req, res) {
   var allJobs = [];
   for (var entry of jobs.entries()) {
-    allJobs.push({ jobId: entry[0], status: entry[1].status, assetId: entry[1].assetId });
+    allJobs.push({ jobId: entry[0], kind: "download", status: entry[1].status, assetId: entry[1].assetId });
+  }
+  for (const [jobId, job] of processJobs.entries()) {
+    allJobs.push({ jobId, kind: "render", status: job.status });
   }
   res.json(allJobs);
 });
