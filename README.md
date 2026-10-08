@@ -110,3 +110,9 @@ Drop a `.ttf` in `fonts/`, add it to `FONTS` in `render/styles.js` (`family` mus
 ## Local checks
 
 Run `npm test` to exercise the authenticated download-to-render flow against a generated local video, validate the optional music mix, and confirm failed jobs return useful status. Tests use a temporary transcription stub and clean up their generated files; they do not contact external clip or music services.
+
+## Download batches
+
+`POST /api/download` accepts the entire batch. Downloads use a FIFO queue with two active jobs; a failed job releases its slot and the remaining jobs continue automatically. `GET /api/status/:jobId` reports `queued` and `queuePosition` while waiting, then `downloading`, `completed`, or `failed`. Clients must not count queue waiting toward their active-download timeout. Publish the compatible app before merging this worker change.
+
+TikTok share links are resolved only through approved HTTPS TikTok hosts and normalized to full `www.tiktok.com/@creator/video/id` URLs. The build refreshes yt-dlp after source changes to avoid an old cached extractor. TikTok restrictions can still prevent downloads; errors remain visible rather than being replaced by a directory listing. Downloader and conversion failures are not treated as successful partial files.
