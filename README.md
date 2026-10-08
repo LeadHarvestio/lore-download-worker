@@ -110,3 +110,28 @@ Drop a `.ttf` in `fonts/`, add it to `FONTS` in `render/styles.js` (`family` mus
 ## Local checks
 
 Run `npm test` to exercise the authenticated download-to-render flow against a generated local video, validate the optional music mix, and confirm failed jobs return useful status. Tests use a temporary transcription stub and clean up their generated files; they do not contact external clip or music services.
+
+## Download batches
+
+`POST /api/download` accepts the entire batch. Downloads use a FIFO queue with two active jobs; a failed job releases its slot and the remaining jobs continue automatically. `GET /api/status/:jobId` reports `queued` and `queuePosition` while waiting, then `downloading`, `completed`, or `failed`. Clients must not count queue waiting toward their active-download timeout. Publish the compatible app before merging this worker change.
+
+TikTok share links are resolved only through approved HTTPS TikTok hosts and normalized to full `www.tiktok.com/@creator/video/id` URLs. The build refreshes yt-dlp after source changes to avoid an old cached extractor. TikTok restrictions can still prevent downloads; errors remain visible rather than being replaced by a directory listing. Downloader and conversion failures are not treated as successful partial files.
+
+## Render batches
+
+Renders have a separate FIFO queue (one active render by default). Accepted jobs report `queued`, `queuedAt`, and their current `queuePosition`; `processing` and `startedAt` are set only when rendering begins. Duplicate submissions with the same queued/running job ID reuse that job. Clients should allow queue waiting separately and start their active-render timeout from `startedAt`. Cached Scribe words remain reusable on recovery and retries.
+
+`GET /api/process/queue` returns active/waiting render counts and the configured limit. Authenticated `GET /api/jobs` lists both download and render jobs with a `kind` field, so deployment readiness checks cover both workloads. Verify both app flags, `downloadQueueWaitSupported` and `renderQueueWaitSupported`, before merging this worker update.
+
+## Fast editing and rendering
+
+- Authenticated `POST /api/live-preview` generates an editing recipe from saved caption words and the exact headline renderer. It does not download media, run FFmpeg, or request transcription. The companion app composites source playback, headline and timed captions in the browser. `GET /api/styles/fonts/:id` serves only bundled fonts. Browser previews are indicative; finished MP4s remain the export/approval source of truth.
+- BlurFit drops to 30 fps before scaling/blur, blurs at 270 × 480 and upscales only the background. Crop still applies before splitting; zoom only affects the sharp foreground. Fill retains its existing crop/zoom semantics.
+- A bounded 512 MiB, four-hour cache reuses a high-quality 1080p background/foreground base, loudness-normalized original audio, and normalized music. Background keys include source identity, layout and crop/zoom, but exclude captions/headlines/audio toggles. Music audio keys use file content. In-use files are leased, concurrent builds deduplicate, and failures remove partial files. Cache files are rebuildable and ephemeral; they are not job persistence.
+- Re-edits can submit `priority: "interactive"` to move ahead of waiting batches without interrupting an active render. Five-minute-old jobs gain priority to avoid starvation. Existing clients default to batch behavior.
+- Preparation and encoding share a ten-minute worker budget. `[RenderTiming]` logs and completed-job `renderStats` expose preparation/encoding time and cache hits without URLs or credentials.
+- Output remains 1080 × 1920, 30 fps, H.264/yuv420p and AAC. Cached caption words (including silent `[]`) remain reusable; censorship, foreground editing and original-audio controls are preserved.
+
+Local synthetic benchmark: a 30-second 1280 × 720 / 60 fps source with audio exported in 94.4 s on the previous pipeline, 27.2 s on a fresh optimized render and 12.1 s on a cached headline re-edit. Recipe generation took 25 ms. These are local measurements, not a Railway performance guarantee; benchmark real sources after deployment.
+
+Publish the compatible companion app first, then merge only after checking BOTH download and render workloads are idle. This worker's in-memory queues and source files do not survive a restart. Verify `capabilities.livePreview = 1`, `interactiveRenderPriority = 1`, and the existing queue capabilities after deployment.

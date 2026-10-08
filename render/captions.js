@@ -36,10 +36,32 @@ export function buildChunks(words, S) {
   return chunks;
 }
 
+export function buildCaptionCues({ words, width, style }) {
+  loadFonts();
+  const family = FONTS[style.font]?.family || "Archivo Black";
+  const fontSize = Math.round(width * style.sizePct / 100);
+  const context = createCanvas(10, 10).getContext("2d");
+  context.font = `${fontSize}px "${family}"`;
+  const chunks = buildChunks(words, style);
+  return chunks.flatMap((chunk, ci) => {
+    const labels = chunk.map(w => style.uppercase ? w.word.toUpperCase() : w.word);
+    const natural = context.measureText(labels.join(" ")).width;
+    const limit = width * (style.maxWidthPct || 90) / 100;
+    const size = natural > limit ? Math.floor(fontSize * limit / natural) : fontSize;
+    return chunk.flatMap((word, wi) => {
+      const start = word.start;
+      let end = chunk[wi + 1]?.start ?? Math.min(word.end + .18, chunks[ci + 1]?.[0]?.start ?? Infinity);
+      if (end <= 0) return [];
+      if (end <= start) end = start + .12;
+      return [{ start, end, fontSize: size, pop: !!style.pop && wi === 0,
+        words: labels.map((text, k) => ({ text, active: k === wi })) }];
+    });
+  });
+}
+
 export function buildAss({ words, width, height, style }) {
   loadFonts();
   const S = style;
-  const mctx = createCanvas(10, 10).getContext("2d");
   const family = FONTS[S.font]?.family || "Archivo Black";
   const fontSize = Math.round(width * S.sizePct / 100);
   const outline = Math.max(0, +(width * S.outlinePct / 100).toFixed(1));
@@ -64,37 +86,21 @@ export function buildAss({ words, width, height, style }) {
   ];
 
   const events = [];
-  const chunks = buildChunks(words, S);
-  chunks.forEach((chunk, ci) => {
-    const nextChunkStart = chunks[ci + 1]?.[0]?.start ?? Infinity;
-    chunk.forEach((w, wi) => {
-      const start = wi === 0 ? chunk[0].start : w.start;
-      let end = chunk[wi + 1] ? chunk[wi + 1].start : Math.min(w.end + 0.18, nextChunkStart);
-      if (end <= 0) return; // seeking a preview must not revive earlier caption events
-      if (end <= start) end = start + 0.12;
-
-      const label = (s) => (S.uppercase ? s.toUpperCase() : s);
-      const body = chunk.map((cw, k) =>
-        `{\\1c${ass(k === wi ? S.highlightColor : S.textColor)}}${label(cw.word)}`
+  buildCaptionCues({ words, width, style }).forEach((cue) => {
+      const { start, end, fontSize: fs } = cue;
+      const body = cue.words.map((cw) =>
+        `{\\1c${ass(cw.active ? S.highlightColor : S.textColor)}}${cw.text}`
       ).join(" ");
-
-      // shrink the whole chunk if it would exceed maxWidthPct of the frame
-      const plainText = chunk.map((cw) => label(cw.word)).join(" ");
-      mctx.font = `${fontSize}px "${family}"`;
-      const natural = mctx.measureText(plainText).width;
-      const limit = width * (S.maxWidthPct || 90) / 100;
-      const fs = natural > limit ? Math.floor(fontSize * limit / natural) : fontSize;
       const pos = `\\an5\\pos(${x},${y})\\fs${fs}`;
-      const pop = S.pop && wi === 0 ? `\\fscx82\\fscy82\\t(0,110,\\fscx100\\fscy100)` : "";
+      const pop = cue.pop ? `\\fscx82\\fscy82\\t(0,110,\\fscx100\\fscy100)` : "";
 
       if (S.glow?.enabled) {
         const gs = +(width * S.glow.sizePct / 100).toFixed(1);
         const gb = +(width * S.glow.blurPct / 100).toFixed(1);
-        const plain = chunk.map((cw) => label(cw.word)).join(" ");
+        const plain = cue.words.map(cw => cw.text).join(" ");
         events.push(`Dialogue: 0,${t(start)},${t(end)},Default,,0,0,0,,{${pos}${pop}\\bord${gs}\\blur${gb}\\shad0\\1a&HFF&\\3c${ass(S.glow.color)}\\3a&H40&}${plain}`);
       }
       events.push(`Dialogue: 1,${t(start)},${t(end)},Default,,0,0,0,,{${pos}${pop}\\blur${blur}}${body}`);
-    });
   });
 
   return head.concat(events).join("\n") + "\n";
