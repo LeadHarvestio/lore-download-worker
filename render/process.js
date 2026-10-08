@@ -10,7 +10,7 @@ import { headlinePosition, previewWords } from "./placement.js";
 import { layoutFilter, sourceSettings } from "./framing.js";
 
 const run = promisify(execFile);
-export const OUT_W = 2160, OUT_H = 3840, FPS = 30;
+export const OUT_W = 1080, OUT_H = 1920, FPS = 30;
 export const PREVIEW_W = 1080, PREVIEW_H = 1920;
 
 export async function probe(file) {

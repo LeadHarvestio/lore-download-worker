@@ -11,13 +11,13 @@ In blurfit, crop trims the source before splitting into blurred and sharp copies
 Zoom enlarges only the sharp foreground and clips it at the output frame.
 Automatic headline placement tracks the edited foreground bounds. Fill ignores
 crop/zoom but respects original-audio muting. The same editing applies to
-1080p PNG previews and 4K finished MP4s.
+1080p PNG previews and 1080p finished MP4s.
 
 Original-audio muting silences only the source's rendered voice channel, not
 music or transcription. Raw source audio and cached words remain available for
 unmuting/restyling. Existing finished files require an explicit re-render.
 
-New finished cuts render at **2160 × 3840 (vertical 4K), 30 fps**, using
+New finished cuts render at **1080 × 1920 (vertical 1080p), 30 fps**, using
 browser-compatible H.264/yuv420p video and AAC audio. Lower-resolution source
 footage is upscaled; no extra native source detail is recovered by upscaling.
 Existing finished files keep their original resolution until re-rendered.
@@ -28,10 +28,11 @@ so their proportions stay consistent between style previews and final renders.
 The styles catalog reports these dimensions, and completed render jobs include
 the actual probed output width and height.
 
-4K requires more CPU and produces larger files than 1080p. The app serving these
-files must support bounded HTTP byte ranges for playback and streamed full
-downloads rather than oversized fixed-length responses. Deploy that delivery
-update before using new 4K renders through the published app.
+1080p replaces the previous 4K default to reduce render CPU/memory pressure and
+avoid 12-minute processing timeouts. A timeout alone does not identify the cause;
+the worker must still be healthy and have capacity for queued jobs. Keep bounded
+HTTP byte ranges for playback and streamed full downloads: longer 1080p videos
+can still exceed a publishing proxy's response-size limits.
 
 # lore-download-worker
 
