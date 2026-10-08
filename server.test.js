@@ -186,7 +186,7 @@ test("authenticated worker downloads a clip, renders it, and serves the MP4 and 
     outputPath,
   ])).stdout);
   const video = probe.streams.find((stream) => stream.codec_type === "video");
-  assert.deepEqual({ width: video.width, height: video.height }, { width: 1080, height: 1920 });
+  assert.deepEqual({ width: video.width, height: video.height }, { width: 2160, height: 3840 });
   assert.ok(probe.streams.some((stream) => stream.codec_type === "audio"));
 
   const missingJob = await fetch(`${baseUrl}/api/process/status/not-a-real-job`, { headers: authHeaders });
@@ -250,7 +250,7 @@ test("renderer mixes source audio with background music while preserving the ver
     outputPath,
   ])).stdout);
   const video = probe.streams.find((stream) => stream.codec_type === "video");
-  assert.deepEqual({ width: video.width, height: video.height }, { width: 1080, height: 1920 });
+  assert.deepEqual({ width: video.width, height: video.height }, { width: 2160, height: 3840 });
   assert.ok(probe.streams.some((stream) => stream.codec_type === "audio"));
 });
 
@@ -284,7 +284,9 @@ test("style presets: renders every preset, honours overrides, and returns cached
       "-v", "error", "-show_entries", "stream=codec_type,width,height", "-of", "json", outputPath,
     ])).stdout);
     const video = probe.streams.find((stream) => stream.codec_type === "video");
-    assert.deepEqual({ width: video.width, height: video.height }, { width: 1080, height: 1920 });
+    assert.deepEqual({ width: video.width, height: video.height }, { width: 2160, height: 3840 });
+    assert.equal(result.outputWidth, 2160);
+    assert.equal(result.outputHeight, 3840);
   }
 
   const pngPath = path.join(tempDirectory, "preview.png");
@@ -294,6 +296,8 @@ test("style presets: renders every preset, honours overrides, and returns cached
   });
   const png = await fs.promises.readFile(pngPath);
   assert.equal(png.subarray(1, 4).toString(), "PNG");
+  assert.equal(png.readUInt32BE(16), 1080, "Style preview remains lightweight");
+  assert.equal(png.readUInt32BE(20), 1920);
 
   await assert.rejects(
     processVideo({ jobId: "bad-db", clipPath, outputPath: path.join(tempDirectory, "bad.mp4"), headline: "X", highlightWords: [], musicVolumeDb: 5, words }),

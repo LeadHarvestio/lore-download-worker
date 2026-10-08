@@ -9,7 +9,8 @@ import { muteVolumeFilter } from "./censorship.js";
 import { headlinePosition, previewWords } from "./placement.js";
 
 const run = promisify(execFile);
-export const OUT_W = 1080, OUT_H = 1920, FPS = 30;
+export const OUT_W = 2160, OUT_H = 3840, FPS = 30;
+export const PREVIEW_W = 1080, PREVIEW_H = 1920;
 
 export async function probe(file) {
   const { stdout } = await run(process.env.FFPROBE_BIN || "ffprobe", ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", file]);
@@ -30,15 +31,15 @@ async function normalizeAudio(src, dest) {
 
 function esc(p) { return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'"); }
 
-function layoutFilter(layout) {
+function layoutFilter(layout, width, height) {
   if (layout === "fill") {
-    return `[0:v]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},setsar=1,fps=${FPS}[base]`;
+    return `[0:v]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1,fps=${FPS}[base]`;
   }
   // blurfit: blurred, darkened copy fills the frame; sharp source centred on top
   return [
     `[0:v]split=2[va][vb]`,
-    `[va]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=increase,crop=${OUT_W}:${OUT_H},boxblur=40:6,eq=brightness=-0.12:saturation=1.1[bg]`,
-    `[vb]scale=${OUT_W}:${OUT_H}:force_original_aspect_ratio=decrease,setsar=1[fg]`,
+    `[va]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},boxblur=${Math.round(40 * width / PREVIEW_W)}:6,eq=brightness=-0.12:saturation=1.1[bg]`,
+    `[vb]scale=${width}:${height}:force_original_aspect_ratio=decrease,setsar=1[fg]`,
     `[bg][fg]overlay=(W-w)/2:(H-h)/2,fps=${FPS}[base]`,
   ].join(";");
 }
@@ -58,21 +59,23 @@ function layoutFilter(layout) {
 export async function processClip(p) {
   const info = await probe(p.inputPath);
   const style = p.style;
+  const preview = typeof p.previewAt === "number";
+  const width = preview ? PREVIEW_W : OUT_W;
+  const height = preview ? PREVIEW_H : OUT_H;
   fs.mkdirSync(p.workDir, { recursive: true });
 
-  const hl = renderHeadlinePng({ text: p.headline.text, highlight: p.headline.highlight, width: OUT_W, height: OUT_H, style: style.headline });
+  const hl = renderHeadlinePng({ text: p.headline.text, highlight: p.headline.highlight, width, height, style: style.headline });
   const hlPath = path.join(p.workDir, "headline.png");
   fs.writeFileSync(hlPath, hl.buffer);
 
-  const preview = typeof p.previewAt === "number";
   const assWords = preview ? previewWords(p.words || [], p.previewAt) : p.words || [];
-  const assText = buildAss({ words: assWords, width: OUT_W, height: OUT_H, style: style.caption });
+  const assText = buildAss({ words: assWords, width, height, style: style.caption });
   const assPath = path.join(p.workDir, "captions.ass");
   fs.writeFileSync(assPath, assText);
 
   const dur = preview ? 1 : info.duration;
   const yTop = headlinePosition({ sourceWidth: info.width, sourceHeight: info.height,
-    width: OUT_W, height: OUT_H, headline: hl, style });
+    width, height, headline: hl, style });
   const secs = style.headline.seconds;
   const enable = secs ? `:enable='between(t,0,${secs - (preview ? p.previewAt : 0)})'` : "";
 
@@ -98,7 +101,7 @@ export async function processClip(p) {
   if (voiceWav) { args.push("-i", voiceWav); voiceIdx = nextIdx++; }
 
   const f = [
-    layoutFilter(style.layout),
+    layoutFilter(style.layout, width, height),
     `[1:v]format=rgba[hl]`,
     `[base][hl]overlay=x=(W-w)/2:y=${yTop}${enable}[withhl]`,
     `[withhl]ass='${esc(assPath)}':fontsdir='${esc(FONT_DIR)}',format=yuv420p[outv]`,
@@ -136,7 +139,7 @@ export async function processClip(p) {
   }
 
   await run(process.env.FFMPEG_BIN || "ffmpeg", args, { timeout: 10 * 60 * 1000, maxBuffer: 20 * 1024 * 1024 });
-  return { duration: dur, headlineLines: hl.lines, headlineFontSize: hl.fontSize };
+  return { duration: dur, width, height, headlineLines: hl.lines, headlineFontSize: hl.fontSize };
 }
 
 export { resolveStyle };

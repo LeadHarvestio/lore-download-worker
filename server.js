@@ -10,6 +10,7 @@ import { fileURLToPath } from "url";
 import os from "os";
 import { processVideo, previewFrame, validateStyleInput } from "./video-processor.js";
 import { PRESETS, FONTS } from "./render/styles.js";
+import { OUT_W, OUT_H, FPS, PREVIEW_W, PREVIEW_H } from "./render/process.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
@@ -195,6 +196,8 @@ function startQueuedProcessJobs() {
         filename: outputFilename,
         srtPath: srtFilename ? "/api/file/" + srtFilename : null,
         durationSeconds: result.durationSeconds,
+        outputWidth: result.outputWidth,
+        outputHeight: result.outputHeight,
         captionWordCount: result.captionWordCount,
         words: result.words,
         censorship: result.censorship,
@@ -333,7 +336,7 @@ app.get("/api/process/status/:jobId", auth, function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1 } });
 });
 
 // Synchronous one-frame PNG of a style, for the Review page live preview.

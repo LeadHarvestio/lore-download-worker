@@ -1,3 +1,21 @@
+# Output quality
+
+New finished cuts render at **2160 × 3840 (vertical 4K), 30 fps**, using
+browser-compatible H.264/yuv420p video and AAC audio. Lower-resolution source
+footage is upscaled; no extra native source detail is recovered by upscaling.
+Existing finished files keep their original resolution until re-rendered.
+
+The synchronous style-preview PNG endpoint stays **1080 × 1920** for speed.
+Headline/caption sizes, placement, padding and blur scale with frame dimensions,
+so their proportions stay consistent between style previews and final renders.
+The styles catalog reports these dimensions, and completed render jobs include
+the actual probed output width and height.
+
+4K requires more CPU and produces larger files than 1080p. The app serving these
+files must support bounded HTTP byte ranges for playback and streamed full
+downloads rather than oversized fixed-length responses. Deploy that delivery
+update before using new 4K renders through the published app.
+
 # lore-download-worker
 
 Railway worker for downloading source clips and rendering review-ready vertical Shorts. All download, transcription, captioning, and FFmpeg work stays in this service.
