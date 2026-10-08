@@ -12,6 +12,8 @@ import { processVideo, previewFrame, validateStyleInput } from "./video-processo
 import { PRESETS, FONTS } from "./render/styles.js";
 import { OUT_W, OUT_H, FPS, PREVIEW_W, PREVIEW_H } from "./render/process.js";
 import { transcriptionAudio } from "./render/transcription-audio.js";
+import { resolveTikTokVideoUrl } from "./download/tiktok.js";
+import { downloadErrorMessage } from "./download/errors.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
@@ -632,6 +634,7 @@ async function downloadDirectVideo(assetId, sourceUrl) {
 }
 
 async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDuration) {
+  sourceUrl = await resolveTikTokVideoUrl(sourceUrl);
   var outputTemplate = path.join(DOWNLOAD_DIR, assetId + ".%(ext)s");
   var expectedMp4 = path.join(DOWNLOAD_DIR, assetId + ".mp4");
 
@@ -664,9 +667,9 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
     });
     if (result.stdout) console.log("[yt-dlp] stdout: " + result.stdout.slice(0, 500));
   } catch (err) {
-    // yt-dlp might exit non-zero but still produce a file
-    console.log("[yt-dlp] Process error (may still have output): " + (err.message || "").slice(0, 200));
-    if (err.stderr) console.log("[yt-dlp] stderr: " + err.stderr.slice(0, 500));
+    // A failed or partial download is not valid footage. Keep useful diagnostics,
+    // but never expose signed source URLs or unrelated files in the UI.
+    throw new Error(downloadErrorMessage(err));
   }
 
   // Check for the expected .mp4 file
@@ -692,15 +695,14 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
         fs.unlinkSync(found);
         return convertedPath;
       } catch (convertErr) {
-        console.log("[yt-dlp] MP4 conversion failed, keeping original: " + convertErr.message);
-        return found;
+        throw new Error("Downloaded video could not be converted to MP4: " + downloadErrorMessage(convertErr));
       }
     }
 
     return found;
   }
 
-  return null;
+  throw new Error("Downloader reported success but no playable video file was produced for this clip.");
 }
 
 var PORT = process.env.PORT || 3001;
