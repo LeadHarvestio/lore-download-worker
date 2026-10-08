@@ -10,6 +10,8 @@ import { fileURLToPath } from "url";
 import os from "os";
 import { processVideo, previewFrame, validateStyleInput } from "./video-processor.js";
 import { PRESETS, FONTS } from "./render/styles.js";
+import { OUT_W, OUT_H, FPS, PREVIEW_W, PREVIEW_H } from "./render/process.js";
+import { transcriptionAudio } from "./render/transcription-audio.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
@@ -195,6 +197,8 @@ function startQueuedProcessJobs() {
         filename: outputFilename,
         srtPath: srtFilename ? "/api/file/" + srtFilename : null,
         durationSeconds: result.durationSeconds,
+        outputWidth: result.outputWidth,
+        outputHeight: result.outputHeight,
         captionWordCount: result.captionWordCount,
         words: result.words,
         censorship: result.censorship,
@@ -332,8 +336,32 @@ app.get("/api/process/status/:jobId", auth, function(req, res) {
   return res.json(publicProcessJob(job));
 });
 
+let audioSampleBusy = false;
+app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
+  if (!API_KEY) return res.status(503).json({ error: "Configure worker API authentication before extracting test audio." });
+  if (audioSampleBusy) return res.status(409).json({ error: "Another audio sample is being prepared." });
+  const name = req.params.filename;
+  if (name !== path.basename(name) || !/^[A-Za-z0-9._-]{1,180}\.(mp4|m4v|mov|webm)$/i.test(name)) {
+    return res.status(400).json({ error: "Invalid source filename." });
+  }
+  const file = path.resolve(DOWNLOAD_DIR, name);
+  if (!file.startsWith(path.resolve(DOWNLOAD_DIR) + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+    return res.status(404).json({ error: "Original source is no longer on the worker; download it again before testing." });
+  }
+  audioSampleBusy = true;
+  try {
+    const sample = await transcriptionAudio(file);
+    res.set({ "Content-Type": "audio/wav", "Cache-Control": "no-store",
+      "X-Source-Duration": String(sample.sourceDuration), "X-Sample-Duration": String(sample.sampleDuration),
+      "X-Complete-Sample": sample.complete ? "1" : "0" });
+    return res.send(sample.audio);
+  } catch {
+    return res.status(422).json({ error: "Could not extract original audio; verify the source has an audio track." });
+  } finally { audioSampleBusy = false; }
+});
+
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, transcriptionAudio: 1 } });
 });
 
 // Synchronous one-frame PNG of a style, for the Review page live preview.

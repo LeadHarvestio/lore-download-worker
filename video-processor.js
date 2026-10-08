@@ -6,8 +6,9 @@ import { promisify } from "util";
 import { lookup } from "dns/promises";
 import { isIP } from "net";
 import { fileURLToPath } from "url";
-import { processClip, resolveStyle } from "./render/process.js";
+import { processClip, resolveStyle, OUT_W, OUT_H } from "./render/process.js";
 import { censorWords, expletiveRanges } from "./render/censorship.js";
+import { sourceSettings } from "./render/framing.js";
 
 const execFileAsync = promisify(execFile);
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -220,6 +221,7 @@ export function validateStyleInput(presetId, overrides) {
   if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
     throw new Error("styleOverrides must be an object.");
   }
+  if (overrides?.source !== undefined) sourceSettings(overrides.source);
 }
 
 function toRenderWords(words) {
@@ -301,14 +303,16 @@ export async function processVideo({
     }
 
     const outputProbe = await probeVideo(outputPath);
-    if (outputProbe.width !== 1080 || outputProbe.height !== 1920) {
-      throw new Error("FFmpeg output did not match the required 9:16 1080x1920 format.");
+    if (outputProbe.width !== OUT_W || outputProbe.height !== OUT_H) {
+      throw new Error(`FFmpeg output did not match the required 9:16 ${OUT_W}x${OUT_H} format.`);
     }
     succeeded = true;
     return {
       outputPath,
       srtPath: words.length ? srtPath : null,
       durationSeconds: outputProbe.durationSeconds,
+      outputWidth: outputProbe.width,
+      outputHeight: outputProbe.height,
       captionWordCount: words.length,
       words: toRenderWords(words),
       censorship: { version: 1, captions: censorCaptions, audio: muteExpletives },

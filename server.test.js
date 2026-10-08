@@ -147,6 +147,18 @@ test("authenticated worker downloads a clip, renders it, and serves the MP4 and 
   assert.equal(downloadJob.status, "completed", downloadJob.error || workerLog);
   assert.equal(downloadJob.filename, "fixture-clip.mp4");
 
+  const deniedAudio = await fetch(`${baseUrl}/api/transcription-audio/${downloadJob.filename}`);
+  assert.equal(deniedAudio.status, 401);
+  const sample = await fetch(`${baseUrl}/api/transcription-audio/${downloadJob.filename}`, { headers: authHeaders });
+  assert.equal(sample.status, 200);
+  assert.equal(sample.headers.get("x-complete-sample"), "1");
+  assert.ok(Number(sample.headers.get("x-sample-duration")) > 0);
+  assert.equal(Buffer.from(await sample.arrayBuffer()).toString("ascii", 0, 4), "RIFF");
+  const badAudioName = await fetch(`${baseUrl}/api/transcription-audio/..%2Ffixture-clip.mp4`, { headers: authHeaders });
+  assert.equal(badAudioName.status, 400);
+  const expiredAudio = await fetch(`${baseUrl}/api/transcription-audio/missing.mp4`, { headers: authHeaders });
+  assert.equal(expiredAudio.status, 404);
+
   const processResponse = await fetch(`${baseUrl}/api/process`, jsonOptions(authHeaders, {
     jobId: "fixture-process",
     clipFilename: downloadJob.filename,
@@ -186,7 +198,7 @@ test("authenticated worker downloads a clip, renders it, and serves the MP4 and 
     outputPath,
   ])).stdout);
   const video = probe.streams.find((stream) => stream.codec_type === "video");
-  assert.deepEqual({ width: video.width, height: video.height }, { width: 1080, height: 1920 });
+  assert.deepEqual({ width: video.width, height: video.height }, { width: 2160, height: 3840 });
   assert.ok(probe.streams.some((stream) => stream.codec_type === "audio"));
 
   const missingJob = await fetch(`${baseUrl}/api/process/status/not-a-real-job`, { headers: authHeaders });
@@ -250,7 +262,7 @@ test("renderer mixes source audio with background music while preserving the ver
     outputPath,
   ])).stdout);
   const video = probe.streams.find((stream) => stream.codec_type === "video");
-  assert.deepEqual({ width: video.width, height: video.height }, { width: 1080, height: 1920 });
+  assert.deepEqual({ width: video.width, height: video.height }, { width: 2160, height: 3840 });
   assert.ok(probe.streams.some((stream) => stream.codec_type === "audio"));
 });
 
@@ -284,7 +296,9 @@ test("style presets: renders every preset, honours overrides, and returns cached
       "-v", "error", "-show_entries", "stream=codec_type,width,height", "-of", "json", outputPath,
     ])).stdout);
     const video = probe.streams.find((stream) => stream.codec_type === "video");
-    assert.deepEqual({ width: video.width, height: video.height }, { width: 1080, height: 1920 });
+    assert.deepEqual({ width: video.width, height: video.height }, { width: 2160, height: 3840 });
+    assert.equal(result.outputWidth, 2160);
+    assert.equal(result.outputHeight, 3840);
   }
 
   const pngPath = path.join(tempDirectory, "preview.png");
@@ -294,6 +308,8 @@ test("style presets: renders every preset, honours overrides, and returns cached
   });
   const png = await fs.promises.readFile(pngPath);
   assert.equal(png.subarray(1, 4).toString(), "PNG");
+  assert.equal(png.readUInt32BE(16), 1080, "Style preview remains lightweight");
+  assert.equal(png.readUInt32BE(20), 1920);
 
   await assert.rejects(
     processVideo({ jobId: "bad-db", clipPath, outputPath: path.join(tempDirectory, "bad.mp4"), headline: "X", highlightWords: [], musicVolumeDb: 5, words }),
