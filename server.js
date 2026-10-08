@@ -648,6 +648,13 @@ async function downloadWithYtDlp(assetId, sourceUrl, startTrim, endTrim, maxDura
     "-o", outputTemplate
   ];
 
+  // The supported Linux build bundles browser transport; the Unix zip binary
+  // does not. Keep this request profile specific to TikTok, not X/YouTube.
+  if (new URL(sourceUrl).hostname === "www.tiktok.com") {
+    args.push("--impersonate", "chrome", "--user-agent",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36");
+  }
+
   if (startTrim !== undefined && endTrim !== undefined && endTrim > startTrim) {
     args.push("--download-sections", "*" + startTrim + "-" + endTrim);
     args.push("--force-keyframes-at-cuts");

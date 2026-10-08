@@ -5,5 +5,8 @@ export function downloadErrorMessage(error) {
   const detail = (useful.length ? useful.slice(-8) : lines.slice(-6)).join("\n") || String(error?.message || "Download failed.");
   const termination = error?.killed ? `Downloader was terminated${error.signal ? ` (${error.signal})` : ""}. ` : "";
   const exit = typeof error?.code === "number" ? `Downloader exited with code ${error.code}. ` : "";
-  return termination + exit + detail.replace(/https?:\/\/[^\s"'<>]+/g, "[source URL]").slice(-1500);
+  return termination + exit + detail
+    .replace(/https?:\/\/[^\s"'<>]+/g, "[source URL]")
+    .replace(/\?[^\s"'<>]+/g, "[source query]")
+    .slice(-1500);
 }
