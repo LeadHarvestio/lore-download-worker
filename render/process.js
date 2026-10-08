@@ -8,8 +8,10 @@ import { resolveStyle } from "./styles.js";
 import { muteVolumeFilter } from "./censorship.js";
 import { headlinePosition, previewWords } from "./placement.js";
 import { layoutFilter, sourceSettings } from "./framing.js";
+import { createRenderCache, fileFingerprint, contentFingerprint } from "./cache.js";
 
 const run = promisify(execFile);
+const cache = createRenderCache();
 export const OUT_W = 1080, OUT_H = 1920, FPS = 30;
 export const PREVIEW_W = 1080, PREVIEW_H = 1920;
 
@@ -23,10 +25,12 @@ export async function probe(file) {
 
 // Convert any audio (5.1, 5.1(side), quad, mono, unknown layout...) to plain stereo 44.1 kHz WAV
 // so the filter graph never has to negotiate an unusual channel layout.
-async function normalizeAudio(src, dest) {
+async function normalizeAudio(src, dest, voice = false, signal) {
   await run(process.env.FFMPEG_BIN || "ffmpeg",
-    ["-y", "-hide_banner", "-loglevel", "error", "-i", src, "-vn", "-map", "0:a:0", "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", dest],
-    { timeout: 5 * 60 * 1000, maxBuffer: 10 * 1024 * 1024 });
+    ["-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-i", src, "-vn", "-map", "0:a:0",
+      ...(voice ? ["-af", "aformat=sample_rates=44100:channel_layouts=stereo,loudnorm=I=-16:TP=-1.5:LRA=11,aformat=sample_rates=44100:channel_layouts=stereo"] : []),
+      "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", dest],
+    { timeout: 5 * 60 * 1000, signal, maxBuffer: 10 * 1024 * 1024 });
   return dest;
 }
 
@@ -45,6 +49,12 @@ function esc(p) { return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/
  * @param p.previewAt      if set, render a single PNG frame at this time instead of a video
  */
 export async function processClip(p) {
+  const begin = performance.now();
+  // All preparation/encoding share one budget; sequential stages cannot each
+  // spend ten minutes while the app believes the whole render has timed out.
+  const deadline = AbortSignal.timeout(10 * 60 * 1000);
+  const leases = [];
+  const hits = { background: false, voice: false, music: false };
   const info = await probe(p.inputPath);
   const style = p.style;
   const source = sourceSettings(style.source);
@@ -52,6 +62,7 @@ export async function processClip(p) {
   const width = preview ? PREVIEW_W : OUT_W;
   const height = preview ? PREVIEW_H : OUT_H;
   fs.mkdirSync(p.workDir, { recursive: true });
+  try {
 
   const hl = renderHeadlinePng({ text: p.headline.text, highlight: p.headline.highlight, width, height, style: style.headline });
   const hlPath = path.join(p.workDir, "headline.png");
@@ -72,25 +83,45 @@ export async function processClip(p) {
   let voiceWav = null, musicWav = null;
   if (!preview) {
     if (info.hasAudio) {
-      try { voiceWav = await normalizeAudio(p.inputPath, path.join(p.workDir, "voice.wav")); }
+      try {
+        const voice = await cache.acquire("voice-loudnorm-v1", fileFingerprint(p.inputPath), "wav", dest => normalizeAudio(p.inputPath, dest, true, deadline));
+        leases.push(voice); voiceWav = voice.file; hits.voice = voice.hit;
+      }
       catch (e) { throw new Error("Source audio could not be decoded: " + String(e.stderr || e.message).slice(0, 200)); }
     }
     if (p.musicPath) {
-      try { musicWav = await normalizeAudio(p.musicPath, path.join(p.workDir, "music.wav")); }
+      try {
+        const music = await cache.acquire("music-stereo-v1", await contentFingerprint(p.musicPath), "wav", dest => normalizeAudio(p.musicPath, dest, false, deadline));
+        leases.push(music); musicWav = music.file; hits.music = music.hit;
+      }
       catch (e) { throw new Error("Music file could not be decoded: " + String(e.stderr || e.message).slice(0, 200)); }
     }
   }
+  let backgroundPath = p.inputPath;
+  if (!preview) {
+    const { muteAudio, ...geometry } = source;
+    const background = await cache.acquire("background-1080p-v1", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry }, "mp4", async dest => {
+      await run(process.env.FFMPEG_BIN || "ffmpeg", [
+        "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1", "-i", p.inputPath,
+        "-filter_complex", layoutFilter(style.layout, width, height, info.width, info.height, source),
+        "-map", "[base]", "-an", "-t", dur.toFixed(2), "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
+        "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", dest,
+      ], { timeout: 10 * 60 * 1000, signal: deadline, maxBuffer: 20 * 1024 * 1024 });
+    });
+    leases.push(background); backgroundPath = background.file; hits.background = background.hit;
+  }
+  const prepared = performance.now();
 
   // Bound filter threading: concurrent PNG previews otherwise exhaust worker resources.
   const args = ["-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1"];
   if (preview) args.push("-ss", String(p.previewAt));
-  args.push("-i", p.inputPath, "-loop", "1", "-t", String(dur), "-i", hlPath);
+  args.push("-i", backgroundPath, "-loop", "1", "-t", String(dur), "-i", hlPath);
   let nextIdx = 2, musicIdx = null, voiceIdx = null;
   if (musicWav) { args.push("-stream_loop", "-1", "-i", musicWav); musicIdx = nextIdx++; }
   if (voiceWav) { args.push("-i", voiceWav); voiceIdx = nextIdx++; }
 
   const f = [
-    layoutFilter(style.layout, width, height, info.width, info.height, source),
+    preview ? layoutFilter(style.layout, width, height, info.width, info.height, source) : "[0:v]setsar=1[base]",
     `[1:v]format=rgba[hl]`,
     `[base][hl]overlay=x=(W-w)/2:y=${yTop}${enable}[withhl]`,
     `[withhl]ass='${esc(assPath)}':fontsdir='${esc(FONT_DIR)}',format=yuv420p[outv]`,
@@ -99,7 +130,7 @@ export async function processClip(p) {
   const STEREO = "aformat=sample_rates=44100:channel_layouts=stereo";
   // Muting is applied only to the normalized voice, before mixing music.
   const mute = muteVolumeFilter(p.muteRanges || []);
-  const voiceFilters = `loudnorm=I=-16:TP=-1.5:LRA=11,${STEREO}${mute ? "," + mute : ""}${source.muteAudio ? ",volume=0" : ""}`;
+  const voiceFilters = `${STEREO}${mute ? "," + mute : ""}${source.muteAudio ? ",volume=0" : ""}`;
   let mapAudio = [];
   if (!preview) {
     const gain = typeof p.musicDb === "number" ? p.musicDb : -15;
@@ -123,12 +154,17 @@ export async function processClip(p) {
   if (preview) {
     args.push("-frames:v", "1", "-threads", "1", p.outputPath);
   } else {
-    args.push("-t", dur.toFixed(2), "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+    args.push("-t", dur.toFixed(2), "-c:v", "libx264", "-threads", "2", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-ac", "2", "-ar", "44100", "-b:a", "192k", "-movflags", "+faststart", p.outputPath);
   }
 
-  await run(process.env.FFMPEG_BIN || "ffmpeg", args, { timeout: 10 * 60 * 1000, maxBuffer: 20 * 1024 * 1024 });
-  return { duration: dur, width, height, headlineLines: hl.lines, headlineFontSize: hl.fontSize };
+  await run(process.env.FFMPEG_BIN || "ffmpeg", args, { timeout: 10 * 60 * 1000, signal: deadline, maxBuffer: 20 * 1024 * 1024 });
+  const renderStats = { preparationMs: Math.round(prepared - begin), encodeMs: Math.round(performance.now() - prepared), totalMs: Math.round(performance.now() - begin), cacheHits: hits };
+  if (!preview) console.log("[RenderTiming] " + JSON.stringify(renderStats));
+  return { duration: dur, width, height, headlineLines: hl.lines, headlineFontSize: hl.fontSize, renderStats };
+  } finally {
+    for (const lease of leases.reverse()) lease.release();
+  }
 }
 
 export { resolveStyle };

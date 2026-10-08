@@ -30,7 +30,7 @@ test("20 real renders wait their turn, expose actual start time, and continue af
   }
   assert.ok(base, log);
   const headers = { Authorization: "Bearer local-render-queue-key", "Content-Type": "application/json" };
-  const body = (index) => ({ jobId: `render-batch-${index}`, clipFilename: index === 3 ? "invalid.mp4" : "fixture.mp4", headline: "A TEST CUT", highlightWords: [], words: [] });
+  const body = (index) => ({ jobId: `render-batch-${index}`, clipFilename: index === 3 ? "invalid.mp4" : "fixture.mp4", headline: "A TEST CUT", highlightWords: [], words: [], ...(index === 19 ? { priority: "interactive" } : {}) });
   const get = async (route) => { const r = await fetch(base + route, { headers }); assert.equal(r.status, 200); return r.json(); };
   const accepted = await Promise.all(Array.from({ length: 20 }, async (_, i) => {
     const r = await fetch(base + "/api/process", { method: "POST", headers, body: JSON.stringify(body(i)) });
@@ -65,6 +65,9 @@ test("20 real renders wait their turn, expose actual start time, and continue af
   assert.equal(maxActive, 1);
   assert.equal(final.filter((job) => job.status === "completed").length, 19, log);
   assert.equal(final.filter((job) => job.status === "failed").length, 1, log);
+  const edit = final.find(job => job.jobId === "render-batch-19");
+  const waitedBatch = final.find(job => job.jobId === "render-batch-18");
+  assert.ok(edit.startedAt < waitedBatch.startedAt, "Interactive re-edit must advance ahead of waiting batch renders.");
   const sample = await get("/api/process/status/" + accepted[0].jobId);
   const video = await fetch(base + sample.downloadUrl, { headers });
   assert.equal(video.status, 200);

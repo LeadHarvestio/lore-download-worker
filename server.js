@@ -15,10 +15,13 @@ import { transcriptionAudio } from "./render/transcription-audio.js";
 import { createDownloadQueue } from "./download/queue.js";
 import { downloadErrorMessage } from "./download/errors.js";
 import { resolveTikTokVideoUrl } from "./download/tiktok.js";
+import { livePreviewRecipe } from "./render/live-preview.js";
+import { FONT_DIR } from "./render/headline.js";
+import { orderRenderJobs } from "./render/priority.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 var API_KEY = process.env.API_KEY || "";
 var DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || "/tmp/downloads";
@@ -139,6 +142,7 @@ app.get("/api/file/:filename", auth, function(req, res) {
 });
 
 function publicProcessJob(job) {
+  processQueue = orderRenderJobs(processQueue, processJobs);
   if (job.status === "completed") {
     return {
       jobId: job.jobId,
@@ -150,6 +154,9 @@ function publicProcessJob(job) {
       captionWordCount: job.captionWordCount,
       words: job.words || null,
       censorship: job.censorship,
+      renderStats: job.renderStats,
+      queuedAt: job.queuedAt,
+      startedAt: job.startedAt,
     };
   }
   if (job.status === "failed") {
@@ -179,6 +186,7 @@ function scheduleProcessedFileCleanup(jobId, filenames) {
 }
 
 function startQueuedProcessJobs() {
+  processQueue = orderRenderJobs(processQueue, processJobs);
   while (activeProcesses < maxConcurrentProcesses && processQueue.length) {
     const jobId = processQueue.shift();
     const job = processJobs.get(jobId);
@@ -216,6 +224,7 @@ function startQueuedProcessJobs() {
         outputWidth: result.outputWidth,
         outputHeight: result.outputHeight,
         captionWordCount: result.captionWordCount,
+        renderStats: result.renderStats,
         words: result.words,
         censorship: result.censorship,
         completedAt: Date.now(),
@@ -294,6 +303,9 @@ app.post("/api/process", auth, function(req, res) {
     return res.status(400).json({ error: "outputAspectRatio must be 9:16." });
   }
   const musicVolumeDb = body.musicVolumeDb === undefined ? -15 : body.musicVolumeDb;
+  if (body.priority !== undefined && !["batch", "interactive"].includes(body.priority)) {
+    return res.status(400).json({ error: "priority must be batch or interactive." });
+  }
   if (typeof musicVolumeDb !== "number" || !(musicVolumeDb >= -30 && musicVolumeDb <= -5)) {
     return res.status(400).json({ error: "musicVolumeDb must be a number between -30 and -5." });
   }
@@ -339,6 +351,7 @@ app.post("/api/process", auth, function(req, res) {
     words: Array.isArray(body.words) ? body.words : null,
     censorCaptions: body.censorCaptions ?? false,
     muteExpletives: body.muteExpletives ?? false,
+    priority: body.priority || "batch",
     queuedAt: Date.now(),
   });
   processQueue.push(jobId);
@@ -381,7 +394,28 @@ app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1 } });
+});
+
+app.get("/api/styles/fonts/:id", auth, function(req, res) {
+  const font = Object.hasOwn(FONTS, req.params.id) ? FONTS[req.params.id] : null;
+  if (!font) return res.status(404).json({ error: "Unknown preview font." });
+  return res.type("font/ttf").sendFile(path.join(FONT_DIR, font.file), { dotfiles: "allow" });
+});
+
+app.post("/api/live-preview", auth, function(req, res) {
+  try {
+    const body = req.body || {};
+    validateStyleInput(body.stylePresetId, body.styleOverrides);
+    if (typeof body.headline !== "string" || !body.headline.trim() || body.headline.length > 80) throw new Error("Provide a headline of up to 80 characters.");
+    if (body.censorCaptions !== undefined && typeof body.censorCaptions !== "boolean") throw new Error("censorCaptions must be boolean.");
+    if (body.highlightWords !== undefined && (!Array.isArray(body.highlightWords) || body.highlightWords.length > 10 || body.highlightWords.some(w => typeof w !== "string" || w.length > 60))) throw new Error("Invalid headline highlights.");
+    if (body.words !== undefined && (!Array.isArray(body.words) || body.words.length > 5000 || body.words.some(w =>
+      typeof w?.word !== "string" || w.word.length > 200 || !Number.isFinite(w.start) || !Number.isFinite(w.end) || w.start < 0 || w.end < w.start))) throw new Error("Invalid cached caption words.");
+    return res.set("Cache-Control", "no-store").json(livePreviewRecipe(body));
+  } catch (error) {
+    return res.status(400).json({ error: String(error.message).slice(0, 250) });
+  }
 });
 
 // Synchronous one-frame PNG of a style, for the Review page live preview.

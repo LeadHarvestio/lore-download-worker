@@ -285,8 +285,9 @@ export async function processVideo({
     if (musicUrl) await fetchMusicFile(musicUrl, musicPath);
 
     const style = resolveStyle(stylePresetId, styleOverrides);
+    let rendered;
     try {
-      await processClip({
+      rendered = await processClip({
         inputPath: clipPath,
         outputPath,
         workDir,
@@ -314,6 +315,7 @@ export async function processVideo({
       outputWidth: outputProbe.width,
       outputHeight: outputProbe.height,
       captionWordCount: words.length,
+      renderStats: rendered.renderStats,
       words: toRenderWords(words),
       censorship: { version: 1, captions: censorCaptions, audio: muteExpletives },
     };
