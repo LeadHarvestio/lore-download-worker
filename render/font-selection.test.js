@@ -5,11 +5,25 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
 import { buildAss } from "./captions.js";
 import { FONTS, resolveStyle } from "./styles.js";
 const fontsDir = fileURLToPath(new URL("../fonts/", import.meta.url));
 
 for (const [name, font] of Object.entries(FONTS).filter(([name]) => name.startsWith("Integral CF"))) {
+  test(`${name} asterisk matches capital height without excessive advance`, () => {
+    const alias = `Glyph regression ${name}`;
+    assert.ok(GlobalFonts.registerFromPath(path.join(fontsDir, font.file), alias));
+    const ctx = createCanvas(600, 150).getContext("2d");
+    ctx.font = `100px "${alias}"`;
+    const star = ctx.measureText("*");
+    const letter = ctx.measureText("N");
+    const height = m => m.actualBoundingBoxAscent + m.actualBoundingBoxDescent;
+    assert.ok(Math.abs(height(star) - height(letter)) <= 1,
+      `Star height ${height(star)} does not match capital height ${height(letter)}`);
+    assert.ok(star.width <= letter.width * 1.1 && star.width >= letter.width * .7,
+      `Star advance ${star.width} is disproportionate to letter advance ${letter.width}`);
+  });
   test(`FFmpeg uses the bundled ${name} face, not a substitute font`, async () => {
     const folder = await fs.mkdtemp(path.join(os.tmpdir(), "caption-font-"));
     try {
