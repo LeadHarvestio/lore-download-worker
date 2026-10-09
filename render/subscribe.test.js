@@ -6,6 +6,9 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createCanvas } from "@napi-rs/canvas";
+import { loadImage } from "@napi-rs/canvas";
+import crypto from "node:crypto";
+import { previewFrame } from "../video-processor.js";
 import { prepareCreativeInputs } from "./creative.js";
 const run = promisify(execFile);
 const base = { id: "c5100000-8dc7-4a19-9f71-000000000000", assetId: "c5100001-8dc7-4a19-9f71-000000000001",
@@ -55,5 +58,24 @@ test("encoded alpha overlay and audio only occur at the tail without muting the 
     assert.ok(early < .001 && tail > .05, "Sound must be delayed to the outro");
     const silent = await prepareCreativeInputs({ style: { layers: [{ ...base, audio: false }] }, args: [], nextIndex: 1, width: 320, height: 568, duration: 3 }, async () => mov);
     assert.equal(silent.audioLabels.length, 0);
+    // Static PNG output has a one-second render window, but its animation
+    // must still be anchored to the actual three-second source duration.
+    const assetUrl = `https://example.replit.app/api/editing-assets/${base.assetId}/file`;
+    const cached = path.resolve("uploads/context-assets", `${crypto.createHash("sha256").update(assetUrl).digest("hex")}.mp4`);
+    await fs.mkdir(path.dirname(cached), { recursive: true });
+    await fs.copyFile(mov, cached);
+    try {
+      for (const [at, visible] of [[1, false], [2.5, true]]) {
+        const frame = path.join(dir, `static-${at}.png`);
+        await previewFrame({ clipPath: main, outputPath: frame, workDir: path.join(dir, `work-${at}`),
+          headline: "STATIC CHECK", highlightWords: [], words: [{ word: "CHECK", start: 0, end: 3 }],
+          styleOverrides: { layers: [{ ...base, assetUrl }], caption: { yPct: 15 } }, at });
+        const image = await loadImage(frame), canvas = createCanvas(image.width, image.height), ctx = canvas.getContext("2d");
+        ctx.drawImage(image, 0, 0);
+        const pixel = ctx.getImageData(Math.round(image.width * .5), Math.round(image.height * .7), 1, 1).data;
+        assert.ok(visible ? pixel[1] > 200 && pixel[2] < 30 : pixel[2] > 200 && pixel[1] < 30,
+          "Static preview must use actual source duration for end alignment");
+      }
+    } finally { await fs.rm(cached, { force: true }); }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

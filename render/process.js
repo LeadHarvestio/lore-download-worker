@@ -121,7 +121,7 @@ export async function processClip(p) {
   if (musicWav) { args.push("-stream_loop", "-1", "-i", musicWav); musicIdx = nextIdx++; }
   if (voiceWav) { args.push("-i", voiceWav); voiceIdx = nextIdx++; }
 
-  const creative = await prepareCreativeInputs({ style, args, nextIndex: nextIdx, width, height, duration: dur,
+  const creative = await prepareCreativeInputs({ style, args, nextIndex: nextIdx, width, height, duration: info.duration,
     previewAt: preview ? p.previewAt : undefined, originalPath: p.inputPath, originalIndex: preview ? 0 : undefined });
   const f = [
     preview ? layoutFilter(style.layout, width, height, info.width, info.height, source) : "[0:v]setsar=1[base]",
