@@ -268,7 +268,7 @@ export async function processVideo({
   const probe = await probeVideo(clipPath);
   const normalizedHeadline = safeText(headline, 80) || "STREAMER CLIP";
   const highlights = Array.isArray(highlightWords)
-    ? highlightWords.map((word) => safeText(word, 60)).filter(Boolean).slice(0, 10)
+    ? highlightWords.map((word) => safeText(word, 100)).filter(Boolean)
     : [];
   const srtPath = path.join(path.dirname(outputPath), `${jobId}.srt`);
   const workDir = path.join(os.tmpdir(), `render-${jobId}-${Date.now()}`);
