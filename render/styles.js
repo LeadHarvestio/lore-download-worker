@@ -3,12 +3,14 @@
 // Colors are CSS hex strings.
 
 export const FONTS = {
-  "Integral CF Regular": { family: "FONTSPRING DEMO - Integral CF", file: "IntegralCF-Regular.otf" },
-  "Integral CF Medium": { family: "FONTSPRING DEMO - Integral CF Medium", file: "IntegralCF-Medium.otf" },
-  "Integral CF Demi Bold": { family: "FONTSPRING DEMO - Integral CF Demi Bold", file: "IntegralCF-DemiBold.otf" },
-  "Integral CF Bold": { family: "FONTSPRING DEMO - Integral CF Bold", file: "IntegralCF-Bold.otf" },
-  "Integral CF Extra Bold": { family: "FONTSPRING DEMO - Integral CF Extra Bold", file: "IntegralCF-ExtraBold.otf" },
-  "Integral CF Heavy": { family: "FONTSPRING DEMO - Integral CF Heavy", file: "IntegralCF-Heavy.otf" },
+  // Canvas aliases are registered explicitly. libass must use the unique PostScript
+  // names: these OTFs expose abbreviated legacy family names, not the Canvas alias.
+  "Integral CF Regular": { family: "FONTSPRING DEMO - Integral CF", assFamily: "FONTSPRINGDEMO-IntegralCFRegular", file: "IntegralCF-Regular.otf" },
+  "Integral CF Medium": { family: "FONTSPRING DEMO - Integral CF Medium", assFamily: "FONTSPRINGDEMO-IntegralCFMediumRegular", file: "IntegralCF-Medium.otf" },
+  "Integral CF Demi Bold": { family: "FONTSPRING DEMO - Integral CF Demi Bold", assFamily: "FONTSPRINGDEMO-IntegralCFDemiBoldRegular", file: "IntegralCF-DemiBold.otf" },
+  "Integral CF Bold": { family: "FONTSPRING DEMO - Integral CF Bold", assFamily: "FONTSPRINGDEMO-IntegralCFBoldRegular", file: "IntegralCF-Bold.otf" },
+  "Integral CF Extra Bold": { family: "FONTSPRING DEMO - Integral CF Extra Bold", assFamily: "FONTSPRINGDEMO-IntegralCFExtraBoldRegular", file: "IntegralCF-ExtraBold.otf" },
+  "Integral CF Heavy": { family: "FONTSPRING DEMO - Integral CF Heavy", assFamily: "FONTSPRINGDEMO-IntegralCFHeavyRegular", file: "IntegralCF-Heavy.otf" },
   // key -> { family (as registered / as libass sees it), file }
   "Anton":        { family: "Anton",        file: "Anton-Regular.ttf" },
   "Archivo Black":{ family: "Archivo Black",file: "ArchivoBlack-Regular.ttf" },
