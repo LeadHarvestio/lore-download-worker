@@ -9,6 +9,7 @@ import { muteVolumeFilter } from "./censorship.js";
 import { headlinePosition, previewWords } from "./placement.js";
 import { layoutFilter, sourceSettings } from "./framing.js";
 import { createRenderCache, fileFingerprint, contentFingerprint } from "./cache.js";
+import { prepareCreativeInputs } from "./creative.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
@@ -120,10 +121,13 @@ export async function processClip(p) {
   if (musicWav) { args.push("-stream_loop", "-1", "-i", musicWav); musicIdx = nextIdx++; }
   if (voiceWav) { args.push("-i", voiceWav); voiceIdx = nextIdx++; }
 
+  const creative = await prepareCreativeInputs({ style, args, nextIndex: nextIdx, width, height, duration: dur,
+    previewAt: preview ? p.previewAt : undefined, originalPath: p.inputPath, originalIndex: preview ? 0 : undefined });
   const f = [
     preview ? layoutFilter(style.layout, width, height, info.width, info.height, source) : "[0:v]setsar=1[base]",
+    ...creative.filters,
     `[1:v]format=rgba[hl]`,
-    `[base][hl]overlay=x=(W-w)/2:y=${yTop}${enable}[withhl]`,
+    `[${creative.label}][hl]overlay=x=(W-w)/2:y=${yTop}${enable}[withhl]`,
     `[withhl]ass='${esc(assPath)}':fontsdir='${esc(FONT_DIR)}',format=yuv420p[outv]`,
   ];
 

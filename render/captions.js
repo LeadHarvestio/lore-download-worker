@@ -45,7 +45,7 @@ export function buildCaptionCues({ words, width, style }) {
   const chunks = buildChunks(words, style);
   return chunks.flatMap((chunk, ci) => {
     const labels = chunk.map(w => style.uppercase ? w.word.toUpperCase() : w.word);
-    const natural = context.measureText(labels.join(" ")).width;
+    const natural = style.stacked ? Math.max(...labels.map(label => context.measureText(label).width)) : context.measureText(labels.join(" ")).width;
     const limit = width * (style.maxWidthPct || 90) / 100;
     const size = natural > limit ? Math.floor(fontSize * limit / natural) : fontSize;
     return chunk.flatMap((word, wi) => {
@@ -54,7 +54,8 @@ export function buildCaptionCues({ words, width, style }) {
       if (end <= 0) return [];
       if (end <= start) end = start + .12;
       return [{ start, end, fontSize: size, pop: !!style.pop && wi === 0,
-        words: labels.map((text, k) => ({ text, active: k === wi })) }];
+        words: labels.map((text, k) => ({ text, active: k === wi, color: chunk[k].color,
+          breakBefore: k > 0 && (!!style.stacked || !!chunk[k].breakBefore) })).filter((_word, k) => style.animation !== "reference" || k <= wi) }];
     });
   });
 }
@@ -88,19 +89,24 @@ export function buildAss({ words, width, height, style }) {
   const events = [];
   buildCaptionCues({ words, width, style }).forEach((cue) => {
       const { start, end, fontSize: fs } = cue;
-      const body = cue.words.map((cw) =>
-        `{\\1c${ass(cw.active ? S.highlightColor : S.textColor)}}${cw.text}`
-      ).join(" ");
+      const body = cue.words.map((cw, index) =>
+        `${index ? cw.breakBefore ? "\\N" : " " : ""}{\\1c${ass(cw.color || (cw.active ? S.highlightColor : S.textColor))}}${cw.text}`
+      ).join("");
       const pos = `\\an5\\pos(${x},${y})\\fs${fs}`;
-      const pop = cue.pop ? `\\fscx82\\fscy82\\t(0,110,\\fscx100\\fscy100)` : "";
+      const ms = Math.min(300, Math.max(40, Number(S.animationMs) || 100));
+      const exit = Math.max(ms, Math.round((end - start) * 1000) - ms);
+      const pop = S.pop === false || S.animation === "none" ? "" : S.animation === "reference"
+        ? `\\fscx128\\fscy72\\blur6\\t(0,${ms},\\fscx100\\fscy100\\blur${blur})\\t(${exit},${exit + ms},\\fscx138\\fscy70\\blur7\\alpha&HFF&)`
+        : cue.pop ? `\\fscx82\\fscy82\\t(0,${ms},\\fscx100\\fscy100)` : "";
 
       if (S.glow?.enabled) {
         const gs = +(width * S.glow.sizePct / 100).toFixed(1);
         const gb = +(width * S.glow.blurPct / 100).toFixed(1);
-        const plain = cue.words.map(cw => cw.text).join(" ");
-        events.push(`Dialogue: 0,${t(start)},${t(end)},Default,,0,0,0,,{${pos}${pop}\\bord${gs}\\blur${gb}\\shad0\\1a&HFF&\\3c${ass(S.glow.color)}\\3a&H40&}${plain}`);
+        const plain = cue.words.map((cw, index) => `${index ? cw.breakBefore ? "\\N" : " " : ""}{\\3c${ass(cw.color || S.glow.color)}}${cw.text}`).join("");
+        const glowPop = pop.replace(`\\blur${blur})`, `\\blur${gb})`);
+        events.push(`Dialogue: 0,${t(start)},${t(end)},Default,,0,0,0,,{${pos}\\blur${gb}${glowPop}\\bord${gs}\\shad0\\1a&HFF&\\3a&H40&}${plain}`);
       }
-      events.push(`Dialogue: 1,${t(start)},${t(end)},Default,,0,0,0,,{${pos}${pop}\\blur${blur}}${body}`);
+      events.push(`Dialogue: 1,${t(start)},${t(end)},Default,,0,0,0,,{${pos}\\blur${blur}${pop}}${body}`);
   });
 
   return head.concat(events).join("\n") + "\n";

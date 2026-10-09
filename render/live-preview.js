@@ -8,7 +8,7 @@ export function livePreviewRecipe({ headline, highlightWords = [], words, styleP
   const style = resolveStyle(stylePresetId, styleOverrides);
   const width = 1080, height = 1920;
   const image = renderHeadlinePng({ text: headline, highlight: highlightWords, width, height, style: style.headline });
-  const raw = (words || []).map(w => ({ word: w.word ?? w.text, start: w.start, end: w.end }));
+  const raw = (words || []).map(w => ({ ...w, word: w.word ?? w.text, start: w.start, end: w.end }));
   return {
     width, height,
     headline: { image: `data:image/png;base64,${image.buffer.toString("base64")}`, width: image.width, height: image.height, visibleBox: image.visibleBox },

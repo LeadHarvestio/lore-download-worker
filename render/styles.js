@@ -3,6 +3,12 @@
 // Colors are CSS hex strings.
 
 export const FONTS = {
+  "Integral CF Regular": { family: "FONTSPRING DEMO - Integral CF", file: "IntegralCF-Regular.otf" },
+  "Integral CF Medium": { family: "FONTSPRING DEMO - Integral CF Medium", file: "IntegralCF-Medium.otf" },
+  "Integral CF Demi Bold": { family: "FONTSPRING DEMO - Integral CF Demi Bold", file: "IntegralCF-DemiBold.otf" },
+  "Integral CF Bold": { family: "FONTSPRING DEMO - Integral CF Bold", file: "IntegralCF-Bold.otf" },
+  "Integral CF Extra Bold": { family: "FONTSPRING DEMO - Integral CF Extra Bold", file: "IntegralCF-ExtraBold.otf" },
+  "Integral CF Heavy": { family: "FONTSPRING DEMO - Integral CF Heavy", file: "IntegralCF-Heavy.otf" },
   // key -> { family (as registered / as libass sees it), file }
   "Anton":        { family: "Anton",        file: "Anton-Regular.ttf" },
   "Archivo Black":{ family: "Archivo Black",file: "ArchivoBlack-Regular.ttf" },
@@ -29,7 +35,7 @@ const baseHeadline = {
 };
 
 const baseCaption = {
-  font: "Archivo Black",
+  font: "Integral CF Extra Bold",
   sizePct: 11.5,         // font size as % of frame WIDTH (auto-shrinks per chunk to fit maxWidthPct)
   maxWidthPct: 90,
   uppercase: true,
@@ -45,6 +51,7 @@ const baseCaption = {
   wordsPerChunk: 2,      // 1-3. Words shown together
   maxCharsPerChunk: 16,
   pop: true,             // quick scale-in on every chunk
+  animation: "reference", animationMs: 100, stacked: false,
 };
 
 export const PRESETS = {
@@ -91,6 +98,10 @@ export const PRESETS = {
 // Deep-merge user overrides (from the DB / UI) over a preset.
 import { sourceSettings } from "./framing.js";
 for (const preset of Object.values(PRESETS)) preset.source = sourceSettings();
+// New defaults do not overwrite explicit, saved per-clip choices.
+PRESETS.boxed_red.caption = { ...baseCaption, wordsPerChunk: 1, yPct: 60,
+  highlightColor: "#FFFFFF", outlinePct: 0, shadowPct: 0, blurPct: 0,
+  glow: { enabled: true, color: "#FFFFFF", sizePct: .65, blurPct: 2.2 } };
 
 export function resolveStyle(presetId, overrides = {}) {
   const base = PRESETS[presetId] || PRESETS.boxed_red;
