@@ -46,9 +46,12 @@ test("preview captions use the selected source time without reviving past words"
   assert.equal(words[1].start, 2.2);
   const ass = buildAss({ words: shifted, width: 1080, height: 1920, style: resolveStyle("boxed_red").caption });
   const events = ass.split("\n").filter(s => s.startsWith("Dialogue:"));
-  assert.equal(events.length, 1);
-  assert.match(events[0], /F\*CK/);
-  assert.match(events[0], /0:00:00\.00,0:00:00\.58/);
+  assert.equal(events.length, 2); // matching halo and sharp Integral fill
+  for (const event of events) {
+    assert.match(event, /F\*CK/);
+    assert.match(event, /0:00:00\.00,0:00:00\.58/);
+    assert.doesNotMatch(event, /EARLIER/);
+  }
 });
 
 test("concurrent synthetic PNG previews draw the selected caption without filter-thread errors", async () => {
@@ -67,7 +70,7 @@ test("concurrent synthetic PNG previews draw the selected caption without filter
       const image = await loadImage(out);
       const c = createCanvas(1080, 1920);
       c.getContext("2d").drawImage(image, 0, 0);
-      return c.getContext("2d").getImageData(0, 1400, 1080, 300).data;
+      return c.getContext("2d").getImageData(0, Math.round(1920 * style.caption.yPct / 100) - 150, 1080, 300).data;
     }));
     assert.notDeepEqual(outputs[0], outputs[1], "Caption must change the actual PNG pixels");
   } finally { rmSync(dir, { recursive: true, force: true }); }
