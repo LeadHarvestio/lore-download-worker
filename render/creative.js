@@ -81,8 +81,13 @@ export async function edgedCutout(file, width, glow, cacheDir = ROOT) {
 
 export async function prepareCreativeInputs({ style, args, nextIndex, width, height, duration, previewAt, originalPath, originalIndex }, resolver = downloadAsset) {
   const offset = previewAt ?? 0;
-  const layers = style.layers || [], effects = style.effects || [];
-  if (!Array.isArray(layers) || layers.length > 12 || !Array.isArray(effects) || effects.length > 30) throw new Error("Invalid creative layer count.");
+  const rawLayers = style.layers || [], effects = style.effects || [];
+  if (!Array.isArray(rawLayers) || rawLayers.length > 13 || !Array.isArray(effects) || effects.length > 30) throw new Error("Invalid creative layer count.");
+  const layers = rawLayers.map(layer => {
+    if (layer.anchor === undefined) return layer;
+    if (layer.anchor !== "end" || !Number.isFinite(layer.mediaDurationSeconds) || layer.mediaDurationSeconds <= 0 || layer.mediaDurationSeconds > 10) throw new Error("Invalid end-anchored animation.");
+    return { ...layer, startSeconds: Math.max(0, duration - layer.mediaDurationSeconds), endSeconds: duration };
+  });
   let index = nextIndex, mainIndex = originalIndex;
   if (layers.some(l => l.mode !== "overlay") && mainIndex === undefined) {
     mainIndex = index++; if (previewAt !== undefined) args.push("-ss", String(previewAt));
@@ -103,11 +108,16 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
     }
     entries.push({ layer, index: index++, edged: layer.kind === "cutout" && layer.glow?.enabled, targetWidth });
   }
-  const filters = []; let current = "base";
+  const filters = [], audioFilters = [], audioLabels = []; let current = "base";
   for (const [n, entry] of entries.entries()) {
     const { layer: l, index: input } = entry;
     const label = `context${n}`, output = `contextbase${n}`, start = previewAt === undefined ? l.startSeconds : 0;
     const enable = active(l.startSeconds, l.endSeconds, offset);
+    if (l.audio === true && previewAt === undefined) {
+      const audioLabel = `contextaudio${n}`;
+      audioFilters.push(`[${input}:a]atrim=duration=${l.endSeconds - l.startSeconds},asetpts=PTS-STARTPTS,adelay=${Math.round(l.startSeconds * 1000)}:all=1,apad,atrim=duration=${duration},aformat=sample_rates=44100:channel_layouts=stereo[${audioLabel}]`);
+      audioLabels.push(audioLabel);
+    }
     const split = l.kind === "video" && l.mode !== "overlay";
     const w = split ? width : Math.round(width * l.widthPct / 100);
     const h = split ? Math.round(height / 2) : Math.round(height * l.heightPct / 100);
@@ -162,5 +172,5 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
     } else throw new Error("Unsupported video effect.");
     current = output;
   }
-  return { filters, label: current, nextIndex: index };
+  return { filters, label: current, nextIndex: index, audioFilters, audioLabels };
 }
