@@ -18,14 +18,19 @@ for (const file of files) {
     ctx.font = `1200px "${family}"`;
     ctx.fillText("*", 0, 840);
     const alpha = (x, y) => ctx.getImageData(x, y, 1, 1).data[3];
-    for (const [x, y] of [[475, 30], [475, 420], [475, 810], [170, 230], [780, 230], [170, 610], [780, 610]]) {
+    for (const [x, y] of [[299, 200], [299, 420], [299, 640], [130, 315], [470, 315], [130, 525], [470, 525]]) {
       assert.ok(alpha(x, y) > 240, `Missing asterisk arm at ${x},${y}`);
     }
     for (const [x, y] of [[20, 20], [900, 20], [20, 810], [900, 810]]) {
       assert.equal(alpha(x, y), 0, "Glyph must not include the source image background");
     }
     ctx.font = `100px "${family}"`;
-    assert.ok(Math.abs(ctx.measureText("*").width - 950 / 12) < 1);
+    assert.ok(Math.abs(ctx.measureText("*").width - 598 / 12) < 1, "Compact original glyph advance");
+    for (const letter of ["T", "C", "I", "G"]) {
+      assert.ok(Math.abs(ctx.measureText(`*${letter}`).width - ctx.measureText("*").width - ctx.measureText(letter).width) < 2, "No excessive following-letter spacing");
+    }
+    assert.ok(Math.abs(ctx.measureText("'").width - ctx.measureText(",").width) < 1);
+    assert.ok(Math.abs(ctx.measureText("’").width - ctx.measureText("'").width) < 1, "Curly apostrophe uses the same repaired glyph");
     // Removing * creates a new F/C kerning pair, so the word-width difference
     // is not necessarily the isolated glyph's advance.
     assert.ok(ctx.measureText("F*CK").width > ctx.measureText("FCK").width);

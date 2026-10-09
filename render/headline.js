@@ -26,7 +26,14 @@ export function tokenize(text, highlight = [], uppercase = true) {
   const words = t.split(/\s+/).filter(Boolean);
   const flags = new Array(words.length).fill(false);
   const normWords = words.map(norm);
+  const positions = [...text.matchAll(/\S+/g)].map(match => ({ start: match.index, text: match[0] }));
   for (const h of highlight || []) {
+    const positioned = /^@word:(\d+):(.*)$/.exec(String(h));
+    if (positioned) {
+      const index = Number(positioned[1]);
+      if (positions[index]?.text.toLowerCase() === positioned[2].toLowerCase()) flags[index] = true;
+      continue;
+    }
     const hw = String(h).split(/\s+/).map(norm).filter(Boolean);
     if (!hw.length) continue;
     for (let i = 0; i + hw.length <= words.length; i++) {

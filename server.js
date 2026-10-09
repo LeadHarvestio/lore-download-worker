@@ -440,7 +440,7 @@ app.post("/api/preview", auth, async function(req, res) {
     await previewFrame({
       clipPath, outputPath: out, workDir,
       headline: typeof body.headline === "string" ? body.headline : "",
-      highlightWords: Array.isArray(body.highlightWords) ? body.highlightWords.slice(0, 10).map(String) : [],
+      highlightWords: Array.isArray(body.highlightWords) ? body.highlightWords.map(String) : [],
       words: Array.isArray(body.words) ? body.words.slice(0, 200) : null,
       censorCaptions: body.censorCaptions ?? false,
       stylePresetId: presetId,
