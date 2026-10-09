@@ -52,3 +52,43 @@ test("blurs only the separate shadow layer, keeping the main letters crisp", () 
   assert.match(ass, /Dialogue: 1,.*\\blur1\.08/);
   assert.match(ass, /Dialogue: 2,.*\\blur0.*\\shad0/);
 });
+
+test("exports apostrophes, quotation marks and dashes in a real MP4", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "punctuation-export-"));
+  try {
+    const input = path.join(dir, "input.mp4"), output = path.join(dir, "output.mp4");
+    const phrases = ["IT'S IT’S I'M", '"GO" “GO”', "GO-TO GO–TO GO—TO", "D*MN."];
+    await run("ffmpeg", ["-y", "-f", "lavfi", "-i", "color=black:s=360x640:r=30:d=1", "-pix_fmt", "yuv420p", input]);
+    await processVideo({
+      jobId: "punctuation-export", clipPath: input, outputPath: output, headline: "FONT CHECK",
+      highlightWords: [], censorCaptions: false, muteExpletives: false,
+      words: phrases.map((word, i) => ({
+        word, start: i * .25, end: i * .25 + .24, color: "#19E3F2", breakBefore: true,
+      })),
+      styleOverrides: { caption: {
+        font: "Integral CF Extra Bold", yPct: 50, sizePct: 8, maxCharsPerChunk: 48,
+        pop: false, animation: "none", shadowBlurPct: .1, glow: { enabled: true, sizePct: .2, blurPct: .8 },
+      } },
+      transcribeWords: async () => { throw Error("Punctuation check must not run transcription"); },
+    });
+    let montage, montageCtx;
+    for (let i = 0; i < phrases.length; i++) {
+      const frame = path.join(dir, `frame-${i}.png`);
+      await run("ffmpeg", ["-y", "-ss", String(i * .25 + .12), "-i", output, "-frames:v", "1", frame]);
+      const image = await loadImage(frame);
+      montage ??= createCanvas(image.width * 2, 560);
+      montageCtx ??= montage.getContext("2d");
+      const cropped = createCanvas(image.width, 280), ctx = cropped.getContext("2d");
+      ctx.drawImage(image, 0, image.height / 2 - 140, image.width, 280, 0, 0, image.width, 280);
+      const pixels = ctx.getImageData(0, 0, image.width, 280).data;
+      let cyan = 0;
+      for (let p = 0; p < pixels.length; p += 4) if (pixels[p] < 100 && pixels[p + 1] > 140 && pixels[p + 2] > 140) cyan++;
+      assert.ok(cyan > 200, `Missing encoded caption for ${phrases[i]}`);
+      montageCtx.drawImage(cropped, (i % 2) * image.width, Math.floor(i / 2) * 280);
+    }
+    if (process.env.PUNCTUATION_EXPORT_PROOF) {
+      fs.mkdirSync(path.dirname(process.env.PUNCTUATION_EXPORT_PROOF), { recursive: true });
+      fs.writeFileSync(process.env.PUNCTUATION_EXPORT_PROOF, montage.toBuffer("image/png"));
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
