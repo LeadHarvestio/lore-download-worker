@@ -107,7 +107,14 @@ export function buildAss({ words, width, height, style }) {
         const glowPop = pop.replace(`\\blur${blur})`, `\\blur${gb})`);
         events.push(`Dialogue: 0,${t(start)},${t(end)},Default,,0,0,0,,{${pos}\\blur${gb}${glowPop}\\bord${gs}\\shad0\\1a&HFF&\\3a&H40&}${plain}`);
       }
-      events.push(`Dialogue: 1,${t(start)},${t(end)},Default,,0,0,0,,{${pos}\\blur${blur}${pop}}${body}`);
+      const softShadow = Math.max(0, width * (S.shadowBlurPct || 0) / 100);
+      if (softShadow) {
+        const shadowPos = pos.replace(/\\pos\([^)]*\)/, `\\pos(${(width / 2 + shadow).toFixed(1)},${(height * S.yPct / 100 + shadow).toFixed(1)})`);
+        const shadowText = cue.words.map((cw, index) => `${index ? cw.breakBefore ? "\\N" : " " : ""}${cw.text}`).join("");
+        const shadowPop = pop.replace(`\\blur${blur})`, `\\blur${softShadow})`);
+        events.push(`Dialogue: 1,${t(start)},${t(end)},Default,,0,0,0,,{${shadowPos}\\blur${softShadow}${shadowPop}\\bord${outline}\\shad0\\1c${ass(S.shadowColor)}\\3c${ass(S.shadowColor)}\\1a&H40&\\3a&H40&}${shadowText}`);
+      }
+      events.push(`Dialogue: ${softShadow ? 2 : 1},${t(start)},${t(end)},Default,,0,0,0,,{${pos}\\blur${blur}${pop}${softShadow ? "\\shad0" : ""}}${body}`);
   });
 
   return head.concat(events).join("\n") + "\n";

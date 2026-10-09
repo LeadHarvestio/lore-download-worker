@@ -54,7 +54,7 @@ function srtTimestamp(seconds) {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(wholeSeconds).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
 }
 
-function normalizeWords(input, durationSeconds) {
+export function normalizeWords(input, durationSeconds) {
   if (!Array.isArray(input)) throw new Error("Whisper returned an invalid word list.");
   const output = [];
   let previousEnd = 0;
@@ -66,7 +66,7 @@ function normalizeWords(input, durationSeconds) {
     const start = Math.max(previousEnd, 0, Math.min(durationSeconds, rawStart));
     const end = Math.min(durationSeconds, Math.max(start + 0.04, rawEnd));
     if (end <= start) continue;
-    output.push({ start, end, text });
+    output.push({ start, end, text, ...wordAppearance(item) });
     previousEnd = end;
   }
   return output;
@@ -224,13 +224,20 @@ export function validateStyleInput(presetId, overrides) {
   if (overrides?.source !== undefined) sourceSettings(overrides.source);
 }
 
-function toRenderWords(words) {
-  return words.map((w) => ({ word: w.text, start: w.start, end: w.end }));
+export function toRenderWords(words) {
+  return words.map((w) => ({ word: w.text, start: w.start, end: w.end, ...wordAppearance(w) }));
 }
 
-function cleanProvidedWords(input) {
+function wordAppearance(word) {
+  return {
+    ...(typeof word?.color === "string" && /^#[0-9a-f]{6}$/i.test(word.color) ? { color: word.color } : {}),
+    ...(word?.breakBefore === true ? { breakBefore: true } : {}),
+  };
+}
+
+export function cleanProvidedWords(input) {
   if (!Array.isArray(input) || input.length > 3000) throw new Error("words must be an array of up to 3000 items.");
-  return input.map((w) => ({ text: w?.text ?? w?.word, start: w?.start, end: w?.end }));
+  return input.map((w) => ({ text: w?.text ?? w?.word, start: w?.start, end: w?.end, ...wordAppearance(w) }));
 }
 
 /**
@@ -347,7 +354,7 @@ export async function previewFrame({ clipPath = null, outputPath, workDir, headl
     caption: { ...((styleOverrides || {}).caption || {}), pop: false },
   });
   const sample = Array.isArray(words) && words.length
-    ? words.map((w) => ({ word: w.word ?? w.text, start: w.start, end: w.end }))
+    ? words.map((w) => ({ word: w.word ?? w.text, start: w.start, end: w.end, ...wordAppearance(w) }))
     : [{ word: "THESE", start: 0, end: 0.6 }, { word: "WORDS", start: 0.6, end: 1.2 }];
   await processClip({
     inputPath: input,
