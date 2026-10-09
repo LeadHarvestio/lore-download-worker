@@ -154,6 +154,12 @@ export async function processClip(p) {
     }
   }
 
+  if (!preview && creative.audioLabels.length) {
+    f.push(...creative.audioFilters);
+    const inputs = [...(mapAudio.length ? ["outa"] : []), ...creative.audioLabels];
+    f.push(`${inputs.map(label => `[${label}]`).join("")}amix=inputs=${inputs.length}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0,${STEREO}[withcontextaudio]`);
+    mapAudio = ["-map", "[withcontextaudio]"];
+  }
   args.push("-filter_complex", f.join(";"), "-map", "[outv]", ...mapAudio);
   if (preview) {
     args.push("-frames:v", "1", "-threads", "1", p.outputPath);
