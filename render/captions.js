@@ -63,7 +63,8 @@ export function buildCaptionCues({ words, width, style }) {
 export function buildAss({ words, width, height, style }) {
   loadFonts();
   const S = style;
-  const family = FONTS[S.font]?.family || "Archivo Black";
+  const font = FONTS[S.font];
+  const family = font?.assFamily || font?.family || "Archivo Black";
   const fontSize = Math.round(width * S.sizePct / 100);
   const outline = Math.max(0, +(width * S.outlinePct / 100).toFixed(1));
   const shadow = Math.max(0, +(width * S.shadowPct / 100).toFixed(1));
