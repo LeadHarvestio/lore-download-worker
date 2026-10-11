@@ -127,7 +127,7 @@ export async function processClip(p) {
     preview ? layoutFilter(style.layout, width, height, info.width, info.height, source) : "[0:v]setsar=1[base]",
     ...creative.filters,
     `[1:v]format=rgba[hl]`,
-    `[${creative.label}][hl]overlay=x=(W-w)/2:y=${yTop}${enable}[withhl]`,
+    `[${creative.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
     `[withhl]ass='${esc(assPath)}':fontsdir='${esc(FONT_DIR)}',format=yuv420p[outv]`,
   ];
 

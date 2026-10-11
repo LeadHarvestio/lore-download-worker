@@ -99,7 +99,12 @@ export const PRESETS = {
 
 // Deep-merge user overrides (from the DB / UI) over a preset.
 import { sourceSettings } from "./framing.js";
-for (const preset of Object.values(PRESETS)) preset.source = sourceSettings();
+// Keep catalog defaults compatible with older app schemas during worker-first
+// rollouts; the renderer still normalizes missing position values to center.
+for (const preset of Object.values(PRESETS)) {
+  const { xPct, yPct, ...sourceDefaults } = sourceSettings();
+  preset.source = sourceDefaults;
+}
 // New defaults do not overwrite explicit, saved per-clip choices.
 PRESETS.boxed_red.caption = { ...baseCaption, wordsPerChunk: 1, yPct: 60,
   highlightColor: "#FFFFFF", outlinePct: 0, shadowPct: 0, blurPct: 0,
