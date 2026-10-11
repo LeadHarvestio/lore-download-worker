@@ -13,7 +13,9 @@ import { prepareCreativeInputs } from "./creative.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
-export const OUT_W = 1080, OUT_H = 1920, FPS = 30;
+// Final exports are 4K; interactive/static previews remain 1080p.
+// Geometry, headline rasterization and ASS captions use the selected dimensions.
+export const OUT_W = 2160, OUT_H = 3840, FPS = 30;
 export const PREVIEW_W = 1080, PREVIEW_H = 1920;
 
 export async function probe(file) {

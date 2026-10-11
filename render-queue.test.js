@@ -74,6 +74,6 @@ test("20 real renders wait their turn, expose actual start time, and continue af
   assert.ok((await video.arrayBuffer()).byteLength > 1000);
   const metadata = await get("/api/styles");
   assert.equal(metadata.capabilities.renderQueue, 1);
-  assert.equal(metadata.output.width, 1080);
-  assert.equal(metadata.output.height, 1920);
+  assert.equal(metadata.output.width, 2160);
+  assert.equal(metadata.output.height, 3840);
 });
