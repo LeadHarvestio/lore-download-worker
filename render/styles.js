@@ -99,6 +99,7 @@ export const PRESETS = {
 
 // Deep-merge user overrides (from the DB / UI) over a preset.
 import { sourceSettings } from "./framing.js";
+import { videoFilterSettings } from "./video-filters.js";
 // Keep catalog defaults compatible with older app schemas during worker-first
 // rollouts; the renderer still normalizes missing position values to center.
 for (const preset of Object.values(PRESETS)) {
@@ -114,6 +115,11 @@ export function resolveStyle(presetId, overrides = {}) {
   const base = PRESETS[presetId] || PRESETS.boxed_red;
   const result = deepMerge(structuredClone(base), overrides || {});
   result.source = sourceSettings(result.source);
+  // Do not add fields to PRESETS: older published app schemas remain compatible.
+  result.videoFilter = videoFilterSettings(result.videoFilter);
+  result.musicStartSeconds = result.musicStartSeconds ?? 0;
+  if (typeof result.musicStartSeconds !== "number" || !Number.isFinite(result.musicStartSeconds) ||
+      result.musicStartSeconds < 0 || result.musicStartSeconds > 10800) throw new Error("Invalid music start time.");
   if (overrides?.headline?.yPct !== undefined && overrides.headline.autoPosition === undefined) {
     result.headline.autoPosition = false;
   }
