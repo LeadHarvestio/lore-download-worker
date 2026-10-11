@@ -1,4 +1,4 @@
-import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
+import { createCanvas, GlobalFonts, Image } from "@napi-rs/canvas";
 import path from "path";
 import { fileURLToPath } from "url";
 import { FONTS } from "./styles.js";
@@ -109,6 +109,32 @@ function measureWord(ctx, text, size, family) {
 
 export function renderHeadlinePng({ text, highlight, width, height, style }) {
   loadFonts();
+  if (style.coverBox) {
+    const cover = style.coverBox;
+    if (!["xPct", "yPct", "widthPct", "heightPct"].every(k => Number.isFinite(cover[k])) ||
+      cover.widthPct < 1 || cover.widthPct > 100 || cover.heightPct < 1 || cover.heightPct > 100 ||
+      cover.xPct < 0 || cover.xPct > 100 || cover.yPct < 0 || cover.yPct > 100) throw Error("Invalid headline cover bounds.");
+    const cw = Math.round(width * cover.widthPct / 100), ch = Math.round(height * cover.heightPct / 100);
+    const padding = Math.min(width * .01, cw / 8, ch / 8);
+    const inner = renderHeadlinePng({ text, highlight, width, height,
+      style: { ...style, coverBox: null, maxWidthPct: Math.max(.5, (cw - padding * 2) / width * 100),
+        box: { ...style.box, enabled: false }, glow: { ...style.glow, enabled: false },
+        shadow: { ...style.shadow, enabled: false } } });
+    const b = inner.visibleBox;
+    const scale = Math.min((cw - padding * 2) / Math.max(1, b.width), (ch - padding * 2) / Math.max(1, b.height));
+    const canvas = createCanvas(cw, ch), ctx = canvas.getContext("2d");
+    const rgb = /^#([0-9a-f]{6})$/i.exec(style.textColor)?.[1] || "FFFFFF";
+    const luminance = parseInt(rgb.slice(0, 2), 16) * .299 + parseInt(rgb.slice(2, 4), 16) * .587 + parseInt(rgb.slice(4, 6), 16) * .114;
+    ctx.fillStyle = style.box.enabled ? style.box.color : luminance > 150 ? "#101115" : "#FFFFFF";
+    ctx.fillRect(0, 0, cw, ch);
+    const image = new Image(); image.src = inner.buffer;
+    ctx.save(); ctx.beginPath(); ctx.rect(padding, padding, cw - padding * 2, ch - padding * 2); ctx.clip();
+    ctx.drawImage(image, b.x, b.y, b.width, b.height, (cw - b.width * scale) / 2, (ch - b.height * scale) / 2, b.width * scale, b.height * scale);
+    ctx.restore();
+    return { buffer: canvas.toBuffer("image/png"), width: cw, height: ch, lines: inner.lines,
+      fontSize: inner.fontSize * scale, visibleBox: { x: 0, y: 0, width: cw, height: ch },
+      lineAdvance: inner.lineAdvance * scale, inkHeight: inner.inkHeight * scale };
+  }
   const S = style;
   const family = FONTS[S.font]?.family || "Anton";
   const box = S.box;

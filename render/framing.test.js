@@ -10,7 +10,7 @@ import { processClip, resolveStyle } from "./process.js";
 import { headlinePosition } from "./placement.js";
 
 test("source editing defaults and bounds are explicit", () => {
-  assert.deepEqual(sourceSettings(), { cropLeftPct: 0, cropRightPct: 0, cropTopPct: 0, cropBottomPct: 0, zoom: 1, muteAudio: false });
+  assert.deepEqual(sourceSettings(), { cropLeftPct: 0, cropRightPct: 0, cropTopPct: 0, cropBottomPct: 0, zoom: 1, muteAudio: false, xPct: 50, yPct: 50 });
   for (const bad of [{ zoom: 0.9 }, { zoom: 3.1 }, { cropLeftPct: 41 }, { cropTopPct: -1 }, { cropBottomPct: NaN },
     { muteAudio: "true" }, { zoom: "2" }, { constructor: 1 }, { extra: 0 }, null]) {
     assert.throws(() => sourceSettings(bad));

@@ -1,14 +1,14 @@
 // Keep source editing identical between style frames and finished MP4s.
 export function sourceSettings(source = {}) {
   if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("source must be an object.");
-  const result = { cropLeftPct: 0, cropRightPct: 0, cropTopPct: 0, cropBottomPct: 0, zoom: 1, muteAudio: false };
+  const result = { cropLeftPct: 0, cropRightPct: 0, cropTopPct: 0, cropBottomPct: 0, zoom: 1, muteAudio: false, xPct: 50, yPct: 50 };
   for (const key of Object.keys(source)) {
     if (!Object.hasOwn(result, key)) throw new Error(`Unknown source setting: ${key}`);
     const value = source[key];
     if (key === "muteAudio") {
       if (typeof value !== "boolean") throw new Error("muteAudio must be a boolean.");
     } else if (typeof value !== "number" || !Number.isFinite(value) ||
-      value < (key === "zoom" ? 1 : 0) || value > (key === "zoom" ? 3 : 40)) {
+      value < (key === "zoom" ? 1 : 0) || value > (key === "zoom" ? 3 : key === "xPct" || key === "yPct" ? 100 : 40)) {
       throw new Error(`Invalid source setting: ${key}`);
     }
     result[key] = value;
@@ -26,8 +26,11 @@ export function foregroundGeometry(sourceWidth, sourceHeight, width, height, sou
 }
 
 export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, source = {}) {
-  if (layout === "fill") return `[0:v]fps=30,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[base]`;
   const settings = sourceSettings(source);
+  if (layout === "fill") {
+    if (settings.xPct === 50 && settings.yPct === 50) return `[0:v]fps=30,scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[base]`;
+    return `color=c=black:s=${width}x${height}:r=30[canvas];[0:v]fps=30,scale=${width}:${height}:force_original_aspect_ratio=increase,setsar=1[fg];[canvas][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2:shortest=1[base]`;
+  }
   const geometry = foregroundGeometry(sourceWidth, sourceHeight, width, height, settings);
   const cropped = ["cropLeftPct", "cropRightPct", "cropTopPct", "cropBottomPct"].some(key => settings[key] !== 0);
   const crop = cropped ? `crop=w=${geometry.croppedWidth}:h=${geometry.croppedHeight}:x=${Math.floor(sourceWidth * settings.cropLeftPct / 100 / 2) * 2}:y=${Math.floor(sourceHeight * settings.cropTopPct / 100 / 2) * 2},` : "";
@@ -35,6 +38,6 @@ export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, s
     `[0:v]fps=30,${crop}split=2[va][vb]`,
     `[va]scale=${even(width / 4)}:${even(height / 4)}:force_original_aspect_ratio=increase,crop=${even(width / 4)}:${even(height / 4)},boxblur=${Math.round(10 * width / 1080)}:6,eq=brightness=-0.12:saturation=1.1,scale=${width}:${height}[bg]`,
     `[vb]scale=${geometry.width}:${geometry.height},setsar=1[fg]`,
-    `[bg][fg]overlay=(W-w)/2:(H-h)/2[base]`,
+    `[bg][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2[base]`,
   ].join(";");
 }
