@@ -27,6 +27,10 @@ test("cover backing exactly fills its bounds and long text fits without transpar
   const ctx = canvas.getContext("2d"); ctx.drawImage(image, 0, 0);
   for (const [x, y] of [[0, 0], [431, 0], [0, 153], [431, 153]]) assert.deepEqual([...ctx.getImageData(x, y, 1, 1).data], [255, 255, 255, 255]);
   assert.ok(headline.fontSize > 0);
+  const glow = renderHeadlinePng({ text: "WHITE TEXT REMAINS VISIBLE", highlight: [], width: 1080, height: 1920,
+    style: resolveStyle("glow_magenta", { headline: { coverBox: style.headline.coverBox } }).headline });
+  const glowImage = await loadImage(glow.buffer); ctx.drawImage(glowImage, 0, 0);
+  assert.deepEqual([...ctx.getImageData(0, 0, 1, 1).data], [16, 17, 21, 255], "boxless white text gets contrasting backing");
 });
 
 test("native decoded frames move the foreground, preserve blur and put cover on the requested region", { timeout: 90000 }, async () => {

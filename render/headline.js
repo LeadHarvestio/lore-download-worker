@@ -123,7 +123,9 @@ export function renderHeadlinePng({ text, highlight, width, height, style }) {
     const b = inner.visibleBox;
     const scale = Math.min((cw - padding * 2) / Math.max(1, b.width), (ch - padding * 2) / Math.max(1, b.height));
     const canvas = createCanvas(cw, ch), ctx = canvas.getContext("2d");
-    ctx.fillStyle = style.box.color;
+    const rgb = /^#([0-9a-f]{6})$/i.exec(style.textColor)?.[1] || "FFFFFF";
+    const luminance = parseInt(rgb.slice(0, 2), 16) * .299 + parseInt(rgb.slice(2, 4), 16) * .587 + parseInt(rgb.slice(4, 6), 16) * .114;
+    ctx.fillStyle = style.box.enabled ? style.box.color : luminance > 150 ? "#101115" : "#FFFFFF";
     ctx.fillRect(0, 0, cw, ch);
     const image = new Image(); image.src = inner.buffer;
     ctx.save(); ctx.beginPath(); ctx.rect(padding, padding, cw - padding * 2, ch - padding * 2); ctx.clip();
