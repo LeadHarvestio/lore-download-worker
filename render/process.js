@@ -28,9 +28,10 @@ export async function probe(file) {
 
 // Convert any audio (5.1, 5.1(side), quad, mono, unknown layout...) to plain stereo 44.1 kHz WAV
 // so the filter graph never has to negotiate an unusual channel layout.
-async function normalizeAudio(src, dest, voice = false, signal) {
+async function normalizeAudio(src, dest, voice = false, signal, startSeconds = 0) {
   await run(process.env.FFMPEG_BIN || "ffmpeg",
-    ["-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-i", src, "-vn", "-map", "0:a:0",
+    ["-y", "-hide_banner", "-loglevel", "error", "-threads", "2",
+      ...(startSeconds > 0 ? ["-ss", String(startSeconds)] : []), "-i", src, "-vn", "-map", "0:a:0",
       ...(voice ? ["-af", "aformat=sample_rates=44100:channel_layouts=stereo,loudnorm=I=-16:TP=-1.5:LRA=11,aformat=sample_rates=44100:channel_layouts=stereo"] : []),
       "-ac", "2", "-ar", "44100", "-c:a", "pcm_s16le", dest],
     { timeout: 5 * 60 * 1000, signal, maxBuffer: 10 * 1024 * 1024 });
@@ -94,7 +95,14 @@ export async function processClip(p) {
     }
     if (p.musicPath) {
       try {
-        const music = await cache.acquire("music-stereo-v1", await contentFingerprint(p.musicPath), "wav", dest => normalizeAudio(p.musicPath, dest, false, deadline));
+        const offset = style.musicStartSeconds ?? 0;
+        const song = await probe(p.musicPath);
+        if (offset >= song.duration) throw new Error("Music start time is beyond the end of the selected song.");
+        const fingerprint = await contentFingerprint(p.musicPath);
+        // Loop only the selected tail; never bring the skipped intro back.
+        const music = await cache.acquire(offset ? "music-stereo-offset-v1" : "music-stereo-v1",
+          offset ? { input: fingerprint, startSeconds: offset } : fingerprint, "wav",
+          dest => normalizeAudio(p.musicPath, dest, false, deadline, offset));
         leases.push(music); musicWav = music.file; hits.music = music.hit;
       }
       catch (e) { throw new Error("Music file could not be decoded: " + String(e.stderr || e.message).slice(0, 200)); }
@@ -103,10 +111,10 @@ export async function processClip(p) {
   let backgroundPath = p.inputPath;
   if (!preview) {
     const { muteAudio, ...geometry } = source;
-    const background = await cache.acquire("background-1080p-v1", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry }, "mp4", async dest => {
+    const background = await cache.acquire("background-1080p-v1", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter }, "mp4", async dest => {
       await run(process.env.FFMPEG_BIN || "ffmpeg", [
         "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1", "-i", p.inputPath,
-        "-filter_complex", layoutFilter(style.layout, width, height, info.width, info.height, source),
+        "-filter_complex", layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter),
         "-map", "[base]", "-an", "-t", dur.toFixed(2), "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
         "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", dest,
       ], { timeout: 10 * 60 * 1000, signal: deadline, maxBuffer: 20 * 1024 * 1024 });
@@ -126,7 +134,7 @@ export async function processClip(p) {
   const creative = await prepareCreativeInputs({ style, args, nextIndex: nextIdx, width, height, duration: info.duration,
     previewAt: preview ? p.previewAt : undefined, originalPath: p.inputPath, originalIndex: preview ? 0 : undefined });
   const f = [
-    preview ? layoutFilter(style.layout, width, height, info.width, info.height, source) : "[0:v]setsar=1[base]",
+    preview ? layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter) : "[0:v]setsar=1[base]",
     ...creative.filters,
     `[1:v]format=rgba[hl]`,
     `[${creative.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
