@@ -5,6 +5,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import { lookup } from "node:dns/promises";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
+import { sourceVideoFilter } from "./video-filters.js";
 
 const ROOT = path.resolve("uploads", "context-assets");
 const UUID = /^[a-f0-9-]{36}$/;
@@ -24,7 +25,7 @@ async function downloadAsset(layer) {
   if (!UUID.test(layer.assetId)) throw new Error("Invalid context asset identity.");
   let url = validateAssetUrl(layer.assetUrl, layer.assetId);
   const key = createHash("sha256").update(url.href).digest("hex");
-  const dest = path.join(ROOT, `${key}.${layer.kind === "cutout" ? "png" : "mp4"}`);
+  const dest = path.join(ROOT, `${key}.${layer.kind !== "video" ? "png" : "mp4"}`);
   await fs.mkdir(ROOT, { recursive: true });
   if (await fs.stat(dest).catch(() => null)) return dest;
   if (pending.has(key)) return pending.get(key);
@@ -95,13 +96,13 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
   }
   const entries = [];
   for (const layer of layers) {
-    if (!["cutout", "video"].includes(layer.kind) || !UUID.test(layer.assetId) ||
+    if (!["cutout", "video", "image"].includes(layer.kind) || !UUID.test(layer.assetId) ||
         !Number.isFinite(layer.startSeconds) || !Number.isFinite(layer.endSeconds) || layer.endSeconds <= layer.startSeconds) throw new Error("Invalid timed context layer.");
     if (previewAt !== undefined && (previewAt < layer.startSeconds || previewAt >= layer.endSeconds)) continue;
     let file = await resolver(layer);
     const targetWidth = Math.max(2, Math.round(width * layer.widthPct / 100));
     if (layer.kind === "cutout") file = await edgedCutout(file, targetWidth, layer.glow);
-    if (layer.kind === "cutout") args.push("-loop", "1", "-t", String(layer.endSeconds - layer.startSeconds), "-i", file);
+    if (layer.kind !== "video") args.push("-loop", "1", "-t", String(layer.endSeconds - layer.startSeconds), "-i", file);
     else {
       const seek = (layer.trimStartSeconds || 0) + (previewAt === undefined ? 0 : previewAt - layer.startSeconds);
       args.push("-ss", String(seek), "-t", String(layer.endSeconds - layer.startSeconds), "-i", file);
@@ -118,10 +119,13 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
       audioFilters.push(`[${input}:a]atrim=duration=${l.endSeconds - l.startSeconds},asetpts=PTS-STARTPTS,adelay=${Math.round(l.startSeconds * 1000)}:all=1,apad,atrim=duration=${duration},aformat=sample_rates=44100:channel_layouts=stereo[${audioLabel}]`);
       audioLabels.push(audioLabel);
     }
-    const split = l.kind === "video" && l.mode !== "overlay";
+    const split = l.kind !== "cutout" && l.mode !== "overlay";
     const w = split ? width : Math.round(width * l.widthPct / 100);
     const h = split ? Math.round(height / 2) : Math.round(height * l.heightPct / 100);
-    let size = l.kind === "cutout"
+    let size = l.kind === "image"
+      ? split ? `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black,`
+        : `scale=${w}:${h}:force_original_aspect_ratio=decrease,`
+      : l.kind === "cutout"
       ? entry.edged ? "" : `scale=${w}:-1,`
       : `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},`;
     const elapsed = previewAt === undefined ? 0 : previewAt - l.startSeconds;
@@ -140,7 +144,7 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
       const cw = 1 - left - (source.cropRightPct || 0) / 100, ch = 1 - top - (source.cropBottomPct || 0) / 100;
       const zoom = source.zoom || 1;
       const mainW = Math.ceil(w * zoom / 2) * 2, mainH = Math.ceil(h * zoom / 2) * 2;
-      filters.push(`[${mainIndex}:v]crop=iw*${cw}:ih*${ch}:iw*${left}:ih*${top},scale=${mainW}:${mainH}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1[splitmain${n}]`);
+      filters.push(`[${mainIndex}:v]crop=iw*${cw}:ih*${ch}:iw*${left}:ih*${top},${sourceVideoFilter(style.videoFilter)}scale=${mainW}:${mainH}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1[splitmain${n}]`);
       const mainY = l.mode === "split-top" ? h : 0, contextY = l.mode === "split-top" ? 0 : h;
       filters.push(`[${current}][splitmain${n}]overlay=0:${mainY}:enable='${enable}'[splitbase${n}]`);
       filters.push(`[splitbase${n}][${label}]overlay=0:${contextY}:eof_action=pass:enable='${enable}'[${output}]`);
