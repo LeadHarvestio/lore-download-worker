@@ -52,3 +52,24 @@ test("native decoded frames move the foreground, preserve blur and put cover on 
     assert.notDeepEqual(cover(539, 1558), cover(545, 1558), "cover begins at its requested edge, not the frame center");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("finished MP4 retains repositioning and cover bounds at 1080p/30fps", { timeout: 90000 }, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "worker-editor-export-"));
+  try {
+    const clipPath = path.join(dir, "source.mp4"), outputPath = path.join(dir, "finished.mp4");
+    execFileSync("ffmpeg", ["-y", "-v", "error", "-f", "lavfi", "-i", "color=c=0x205090:s=320x180:r=30:d=0.4", "-threads", "1", clipPath]);
+    const { processVideo } = await import("../video-processor.js");
+    await processVideo({ jobId: "position-cover-export", clipPath, outputPath, headline: "REPLACEMENT HEADLINE",
+      highlightWords: ["REPLACEMENT"], words: [{ word: "f*ck", start: 0, end: .4, color: "#19E3F2" }],
+      styleOverrides: { source: { xPct: 50, yPct: 20, cropLeftPct: 5, cropRightPct: 5, zoom: 1.3 },
+        headline: { coverBox: { xPct: 75, yPct: 80, widthPct: 30, heightPct: 10 } } } });
+    const meta = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", outputPath]).toString()).streams[0];
+    assert.deepEqual(meta, { width: 1080, height: 1920, r_frame_rate: "30/1" });
+    const png = execFileSync("ffmpeg", ["-v", "error", "-ss", "0.2", "-i", outputPath, "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"]);
+    const image = await loadImage(png), canvas = createCanvas(image.width, image.height), ctx = canvas.getContext("2d"); ctx.drawImage(image, 0, 0);
+    const pixel = (x, y) => [...ctx.getImageData(x, y, 1, 1).data];
+    assert.ok(pixel(650, 1442)[0] > 235, "cover at correct source-frame coordinates");
+    assert.ok(pixel(640, 1442)[0] < 150, "cover does not extend beyond its bounds");
+    assert.notDeepEqual(pixel(540, 400), pixel(540, 1100), "foreground moved above its old center");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
