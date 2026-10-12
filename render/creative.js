@@ -25,7 +25,7 @@ async function downloadAsset(layer) {
   if (!UUID.test(layer.assetId)) throw new Error("Invalid context asset identity.");
   let url = validateAssetUrl(layer.assetUrl, layer.assetId);
   const key = createHash("sha256").update(url.href).digest("hex");
-  const dest = path.join(ROOT, `${key}.${layer.kind !== "video" ? "png" : "mp4"}`);
+  const dest = path.join(ROOT, `${key}.${layer.kind === "audio" ? "mp3" : layer.kind !== "video" ? "png" : "mp4"}`);
   await fs.mkdir(ROOT, { recursive: true });
   if (await fs.stat(dest).catch(() => null)) return dest;
   if (pending.has(key)) return pending.get(key);
@@ -80,6 +80,7 @@ export async function edgedCutout(file, width, glow, cacheDir = ROOT) {
   return dest;
 }
 
+export { downloadAsset };
 export async function prepareCreativeInputs({ style, args, nextIndex, width, height, duration, previewAt, originalPath, originalIndex }, resolver = downloadAsset) {
   const offset = previewAt ?? 0;
   const rawLayers = style.layers || [], effects = style.effects || [];

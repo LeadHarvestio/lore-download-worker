@@ -50,7 +50,7 @@ test("decoded native frame filters the main footage, not the blur or colored cap
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("actual 4K export loops the chosen song section and offsets invalidate only the music cache", { timeout: 120000 }, async () => {
+test("actual 1080p export loops the chosen song section and offsets invalidate only the music cache", { timeout: 120000 }, async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "worker-music-start-"));
   try {
     const input = path.join(dir, "source.mp4"), music = path.join(dir, "song.wav");
@@ -64,7 +64,7 @@ test("actual 4K export loops the chosen song section and offsets invalidate only
     await processClip({ ...common, style, outputPath: output, workDir: path.join(dir, "first") });
     const meta = JSON.parse(execFileSync("ffprobe", ["-v", "error", "-select_streams", "v:0",
       "-show_entries", "stream=width,height,r_frame_rate", "-of", "json", output]).toString()).streams[0];
-    assert.deepEqual(meta, { width: 2160, height: 3840, r_frame_rate: "30/1" });
+    assert.deepEqual(meta, { width: 1080, height: 1920, r_frame_rate: "30/1" });
     const pcm = execFileSync("ffmpeg", ["-v", "error", "-ss", "0.65", "-i", output, "-t", "0.3",
       "-map", "0:a:0", "-ac", "1", "-ar", "44100", "-f", "f32le", "-"]);
     function energy(freq) {

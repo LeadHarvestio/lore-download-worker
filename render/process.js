@@ -10,10 +10,11 @@ import { headlinePosition, previewWords } from "./placement.js";
 import { layoutFilter, sourceSettings } from "./framing.js";
 import { createRenderCache, fileFingerprint, contentFingerprint } from "./cache.js";
 import { prepareCreativeInputs } from "./creative.js";
+import { prepareSoundEffects } from "./sound-effects.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
-// Final exports are 4K; interactive/static previews remain 1080p.
+// Final exports and interactive/static previews remain 1080p.
 // Geometry, headline rasterization and ASS captions use the selected dimensions.
 export const OUT_W = 1080, OUT_H = 1920, FPS = 30;
 export const PREVIEW_W = 1080, PREVIEW_H = 1920;
@@ -133,6 +134,8 @@ export async function processClip(p) {
 
   const creative = await prepareCreativeInputs({ style, args, nextIndex: nextIdx, width, height, duration: info.duration,
     previewAt: preview ? p.previewAt : undefined, originalPath: p.inputPath, originalIndex: preview ? 0 : undefined });
+  const sounds = await prepareSoundEffects({ effects: style.soundEffects, args, nextIndex: creative.nextIndex,
+    duration: info.duration, preview });
   const f = [
     preview ? layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter) : "[0:v]setsar=1[base]",
     ...creative.filters,
@@ -164,9 +167,9 @@ export async function processClip(p) {
     }
   }
 
-  if (!preview && creative.audioLabels.length) {
-    f.push(...creative.audioFilters);
-    const inputs = [...(mapAudio.length ? ["outa"] : []), ...creative.audioLabels];
+  if (!preview && (creative.audioLabels.length || sounds.labels.length)) {
+    f.push(...creative.audioFilters, ...sounds.filters);
+    const inputs = [...(mapAudio.length ? ["outa"] : []), ...creative.audioLabels, ...sounds.labels];
     f.push(`${inputs.map(label => `[${label}]`).join("")}amix=inputs=${inputs.length}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0,${STEREO}[withcontextaudio]`);
     mapAudio = ["-map", "[withcontextaudio]"];
   }
