@@ -11,6 +11,7 @@ import { layoutFilter, sourceSettings } from "./framing.js";
 import { createRenderCache, fileFingerprint, contentFingerprint } from "./cache.js";
 import { prepareCreativeInputs } from "./creative.js";
 import { prepareSoundEffects } from "./sound-effects.js";
+import { validateSourceEdit, encodeSourceEdit } from "./source-edit.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
@@ -60,7 +61,9 @@ export async function processClip(p) {
   const deadline = AbortSignal.timeout(10 * 60 * 1000);
   const leases = [];
   const hits = { background: false, voice: false, music: false };
-  const info = await probe(p.inputPath);
+  let info = await probe(p.inputPath);
+  const originalFingerprint = fileFingerprint(p.inputPath);
+  let inputCacheKey = originalFingerprint;
   const style = p.style;
   const source = sourceSettings(style.source);
   const preview = typeof p.previewAt === "number";
@@ -68,6 +71,15 @@ export async function processClip(p) {
   const height = preview ? PREVIEW_H : OUT_H;
   fs.mkdirSync(p.workDir, { recursive: true });
   try {
+  if (p.sourceEdit !== undefined) {
+    const sourceEdit = validateSourceEdit(p.sourceEdit, info.duration);
+    inputCacheKey = { original: originalFingerprint, sourceEdit };
+    const edited = await cache.acquire("source-edit-v1", inputCacheKey, "mp4",
+      dest => encodeSourceEdit(p.inputPath, dest, sourceEdit, info.hasAudio, deadline));
+    leases.push(edited);
+    p = { ...p, inputPath: edited.file };
+    info = await probe(p.inputPath);
+  }
 
   const hl = renderHeadlinePng({ text: p.headline.text, highlight: p.headline.highlight, width, height, style: style.headline });
   const hlPath = path.join(p.workDir, "headline.png");
@@ -89,7 +101,7 @@ export async function processClip(p) {
   if (!preview) {
     if (info.hasAudio) {
       try {
-        const voice = await cache.acquire("voice-loudnorm-v1", fileFingerprint(p.inputPath), "wav", dest => normalizeAudio(p.inputPath, dest, true, deadline));
+        const voice = await cache.acquire("voice-loudnorm-v1", inputCacheKey, "wav", dest => normalizeAudio(p.inputPath, dest, true, deadline));
         leases.push(voice); voiceWav = voice.file; hits.voice = voice.hit;
       }
       catch (e) { throw new Error("Source audio could not be decoded: " + String(e.stderr || e.message).slice(0, 200)); }
@@ -112,7 +124,7 @@ export async function processClip(p) {
   let backgroundPath = p.inputPath;
   if (!preview) {
     const { muteAudio, ...geometry } = source;
-    const background = await cache.acquire("background-1080p-v1", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter }, "mp4", async dest => {
+    const background = await cache.acquire("background-1080p-v1", { input: inputCacheKey, width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter }, "mp4", async dest => {
       await run(process.env.FFMPEG_BIN || "ffmpeg", [
         "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1", "-i", p.inputPath,
         "-filter_complex", layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter),

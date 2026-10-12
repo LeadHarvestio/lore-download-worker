@@ -7,6 +7,7 @@ import { lookup } from "dns/promises";
 import { isIP } from "net";
 import { fileURLToPath } from "url";
 import { processClip, resolveStyle, OUT_W, OUT_H } from "./render/process.js";
+import { validateSourceEdit } from "./render/source-edit.js";
 import { censorWords, expletiveRanges } from "./render/censorship.js";
 import { sourceSettings } from "./render/framing.js";
 
@@ -260,6 +261,7 @@ export async function processVideo({
   censorCaptions = false,
   muteExpletives = false,
   transcribeWords = transcribeVideo,
+  sourceEdit,
 }) {
   if (typeof musicVolumeDb !== "number" || musicVolumeDb < -30 || musicVolumeDb > -5) {
     throw new Error("Music volume must be between -30 dB and -5 dB.");
@@ -273,6 +275,9 @@ export async function processVideo({
   if (musicUrl && musicFilePath) throw new Error("Use either a music URL or a local music file.");
 
   const probe = await probeVideo(clipPath);
+  const segments = sourceEdit === undefined ? undefined : validateSourceEdit(sourceEdit, probe.durationSeconds);
+  if (segments && !Array.isArray(providedWords)) throw new Error("Source edits require cached, output-time captions (an empty array is valid).");
+  const renderDuration = segments ? segments.segments.reduce((total, segment) => total + (segment.srcEnd - segment.srcStart) / segment.speed, 0) : probe.durationSeconds;
   const normalizedHeadline = safeText(headline, 80) || "STREAMER CLIP";
   const highlights = Array.isArray(highlightWords)
     ? highlightWords.map((word) => safeText(word, 100)).filter(Boolean)
@@ -284,10 +289,10 @@ export async function processVideo({
 
   try {
     const rawWords = Array.isArray(providedWords) ? cleanProvidedWords(providedWords) : await transcribeWords(clipPath);
-    const words = normalizeWords(rawWords, probe.durationSeconds);
+    const words = normalizeWords(rawWords, renderDuration);
     // Raw words remain the canonical cache. Only display/export copies are masked.
     const captionWords = censorCaptions ? censorWords(words) : words;
-    const muteRanges = muteExpletives ? expletiveRanges(words, probe.durationSeconds) : [];
+    const muteRanges = muteExpletives ? expletiveRanges(words, renderDuration) : [];
     if (words.length) fs.writeFileSync(srtPath, buildSrt(captionWords), "utf8");
     if (musicUrl) await fetchMusicFile(musicUrl, musicPath);
 
@@ -304,6 +309,7 @@ export async function processVideo({
         style,
         musicPath,
         musicDb: musicVolumeDb,
+        ...(segments ? { sourceEdit: segments } : {}),
       });
     } catch (error) {
       const detail = safeText(error?.stderr || error?.message || "unknown FFmpeg error", 700);
@@ -338,7 +344,7 @@ export async function processVideo({
 }
 
 /** One-frame PNG of the style, for the Review page live preview. */
-export async function previewFrame({ clipPath = null, outputPath, workDir, headline, highlightWords, words, stylePresetId, styleOverrides, at = 0, censorCaptions = false }) {
+export async function previewFrame({ clipPath = null, outputPath, workDir, headline, highlightWords, words, stylePresetId, styleOverrides, at = 0, censorCaptions = false, sourceEdit }) {
   validateStyleInput(stylePresetId, styleOverrides);
   fs.mkdirSync(workDir, { recursive: true });
   let input = clipPath;
@@ -357,6 +363,7 @@ export async function previewFrame({ clipPath = null, outputPath, workDir, headl
     ? words.map((w) => ({ word: w.word ?? w.text, start: w.start, end: w.end, ...wordAppearance(w) }))
     : [{ word: "THESE", start: 0, end: 0.6 }, { word: "WORDS", start: 0.6, end: 1.2 }];
   await processClip({
+    ...(sourceEdit !== undefined ? { sourceEdit } : {}),
     inputPath: input,
     outputPath,
     workDir,

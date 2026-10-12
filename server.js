@@ -10,7 +10,8 @@ import { fileURLToPath } from "url";
 import os from "os";
 import { processVideo, previewFrame, validateStyleInput } from "./video-processor.js";
 import { PRESETS, FONTS } from "./render/styles.js";
-import { OUT_W, OUT_H, FPS, PREVIEW_W, PREVIEW_H } from "./render/process.js";
+import { OUT_W, OUT_H, FPS, PREVIEW_W, PREVIEW_H, probe as probeSource } from "./render/process.js";
+import { validateSourceEdit } from "./render/source-edit.js";
 import { transcriptionAudio } from "./render/transcription-audio.js";
 import { createDownloadQueue } from "./download/queue.js";
 import { downloadErrorMessage } from "./download/errors.js";
@@ -211,6 +212,7 @@ function startQueuedProcessJobs() {
         words: job.words,
         censorCaptions: job.censorCaptions,
         muteExpletives: job.muteExpletives,
+        ...(job.sourceEdit !== undefined ? { sourceEdit: job.sourceEdit } : {}),
       });
     }).then(function(result) {
       const srtFilename = result.srtPath ? path.basename(result.srtPath) : null;
@@ -259,7 +261,7 @@ function startQueuedProcessJobs() {
   }
 }
 
-app.post("/api/process", auth, function(req, res) {
+app.post("/api/process", auth, async function(req, res) {
   const body = req.body || {};
   const jobId = body.jobId;
   const clipFilename = body.clipFilename;
@@ -279,9 +281,9 @@ app.post("/api/process", auth, function(req, res) {
   if (!headline || headline.length > 80) {
     return res.status(400).json({ error: "headline must be between 1 and 80 characters." });
   }
-  if (!Array.isArray(highlightWords) || highlightWords.length > 10 ||
-      highlightWords.some(function(word) { return typeof word !== "string" || word.length > 60; })) {
-    return res.status(400).json({ error: "highlightWords must be an array of up to 10 strings." });
+  if (!Array.isArray(highlightWords) ||
+      highlightWords.some(function(word) { return typeof word !== "string" || word.length > 100; })) {
+    return res.status(400).json({ error: "highlightWords must be an array of strings." });
   }
   if (musicUrl !== null && typeof musicUrl !== "string") {
     return res.status(400).json({ error: "musicUrl must be an HTTP(S) URL or null." });
@@ -337,11 +339,16 @@ app.post("/api/process", auth, function(req, res) {
   if (!clipPath.startsWith(path.resolve(DOWNLOAD_DIR) + path.sep) || !fs.existsSync(clipPath) || !fs.statSync(clipPath).isFile()) {
     return res.status(404).json({ error: "Downloaded clip was not found on this worker." });
   }
+  if (body.sourceEdit !== undefined) {
+    try { validateSourceEdit(body.sourceEdit, (await probeSource(clipPath)).duration); }
+    catch (error) { return res.status(400).json({ error: error.message }); }
+  }
 
   processJobs.set(jobId, {
     jobId: jobId,
     status: "queued",
     clipFilename: clipFilename,
+    ...(body.sourceEdit !== undefined ? { sourceEdit: body.sourceEdit } : {}),
     headline: headline,
     highlightWords: highlightWords,
     musicUrl: musicUrl,
@@ -394,7 +401,7 @@ app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, subscribeOverlays: 1, captionReference: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { sourceEdit: 1, soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, subscribeOverlays: 1, captionReference: 1 } });
 });
 
 app.get("/api/styles/fonts/:id", auth, function(req, res) {
@@ -409,7 +416,7 @@ app.post("/api/live-preview", auth, function(req, res) {
     validateStyleInput(body.stylePresetId, body.styleOverrides);
     if (typeof body.headline !== "string" || !body.headline.trim() || body.headline.length > 80) throw new Error("Provide a headline of up to 80 characters.");
     if (body.censorCaptions !== undefined && typeof body.censorCaptions !== "boolean") throw new Error("censorCaptions must be boolean.");
-    if (body.highlightWords !== undefined && (!Array.isArray(body.highlightWords) || body.highlightWords.length > 10 || body.highlightWords.some(w => typeof w !== "string" || w.length > 60))) throw new Error("Invalid headline highlights.");
+    if (body.highlightWords !== undefined && (!Array.isArray(body.highlightWords) || body.highlightWords.some(w => typeof w !== "string" || w.length > 100))) throw new Error("Invalid headline highlights.");
     if (body.words !== undefined && (!Array.isArray(body.words) || body.words.length > 5000 || body.words.some(w =>
       typeof w?.word !== "string" || w.word.length > 200 || !Number.isFinite(w.start) || !Number.isFinite(w.end) || w.start < 0 || w.end < w.start))) throw new Error("Invalid cached caption words.");
     return res.set("Cache-Control", "no-store").json(livePreviewRecipe(body));
@@ -438,6 +445,7 @@ app.post("/api/preview", auth, async function(req, res) {
     fs.mkdirSync(workDir, { recursive: true });
     const out = path.join(workDir, "preview.png");
     await previewFrame({
+      ...(body.sourceEdit !== undefined ? { sourceEdit: body.sourceEdit } : {}),
       clipPath, outputPath: out, workDir,
       headline: typeof body.headline === "string" ? body.headline : "",
       highlightWords: Array.isArray(body.highlightWords) ? body.highlightWords.map(String) : [],
