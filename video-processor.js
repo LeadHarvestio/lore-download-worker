@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import { processClip, resolveStyle, OUT_W, OUT_H } from "./render/process.js";
 import { censorWords, expletiveRanges } from "./render/censorship.js";
 import { sourceSettings } from "./render/framing.js";
+import { validateSourceEdit } from "./render/source-edit.js";
 
 const execFileAsync = promisify(execFile);
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -259,6 +260,7 @@ export async function processVideo({
   words: providedWords = null,
   censorCaptions = false,
   muteExpletives = false,
+  sourceEdit,
   transcribeWords = transcribeVideo,
 }) {
   if (typeof musicVolumeDb !== "number" || musicVolumeDb < -30 || musicVolumeDb > -5) {
@@ -273,6 +275,11 @@ export async function processVideo({
   if (musicUrl && musicFilePath) throw new Error("Use either a music URL or a local music file.");
 
   const probe = await probeVideo(clipPath);
+  const editedSource = sourceEdit === undefined ? undefined : validateSourceEdit(sourceEdit, probe.durationSeconds);
+  const captionDuration = editedSource
+    ? editedSource.segments.reduce((sum, segment) => sum + (segment.srcEnd - segment.srcStart) / segment.speed, 0)
+    : probe.durationSeconds;
+  if (editedSource && !Array.isArray(providedWords)) throw new Error("Source edits require saved output-time captions; no automatic re-transcription is performed.");
   const normalizedHeadline = safeText(headline, 80) || "STREAMER CLIP";
   const highlights = Array.isArray(highlightWords)
     ? highlightWords.map((word) => safeText(word, 100)).filter(Boolean)
@@ -284,7 +291,7 @@ export async function processVideo({
 
   try {
     const rawWords = Array.isArray(providedWords) ? cleanProvidedWords(providedWords) : await transcribeWords(clipPath);
-    const words = normalizeWords(rawWords, probe.durationSeconds);
+    const words = normalizeWords(rawWords, captionDuration);
     // Raw words remain the canonical cache. Only display/export copies are masked.
     const captionWords = censorCaptions ? censorWords(words) : words;
     const muteRanges = muteExpletives ? expletiveRanges(words, probe.durationSeconds) : [];
@@ -295,6 +302,7 @@ export async function processVideo({
     let rendered;
     try {
       rendered = await processClip({
+        ...(sourceEdit !== undefined ? { sourceEdit } : {}),
         inputPath: clipPath,
         outputPath,
         workDir,
@@ -338,7 +346,7 @@ export async function processVideo({
 }
 
 /** One-frame PNG of the style, for the Review page live preview. */
-export async function previewFrame({ clipPath = null, outputPath, workDir, headline, highlightWords, words, stylePresetId, styleOverrides, at = 0, censorCaptions = false }) {
+export async function previewFrame({ clipPath = null, outputPath, workDir, headline, highlightWords, words, stylePresetId, styleOverrides, at = 0, censorCaptions = false, sourceEdit }) {
   validateStyleInput(stylePresetId, styleOverrides);
   fs.mkdirSync(workDir, { recursive: true });
   let input = clipPath;
@@ -358,6 +366,7 @@ export async function previewFrame({ clipPath = null, outputPath, workDir, headl
     : [{ word: "THESE", start: 0, end: 0.6 }, { word: "WORDS", start: 0.6, end: 1.2 }];
   await processClip({
     inputPath: input,
+    ...(sourceEdit !== undefined ? { sourceEdit } : {}),
     outputPath,
     workDir,
     headline: { text: safeText(headline, 80) || "Streamer does something unhinged on stream", highlight: highlightWords || [] },
