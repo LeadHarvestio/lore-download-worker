@@ -19,7 +19,8 @@ export function renderHeadlineCoverFit({ text, highlight, width, height, style }
     stroke.enabled ? width * Number(stroke.widthPct || 0) / 100 * 2 : 0,
     shadow.enabled ? width * (Number(shadow.blurPct || 0) * 2.5 + Math.max(Math.abs(Number(shadow.offsetXPct || 0)), Math.abs(Number(shadow.offsetYPct || 0)))) / 100 : 0,
     glow.enabled ? width * Number(glow.blurPct || 0) * 2.5 / 100 : 0);
-  const maxWidth = Math.max(1, rect.width * .92 - inset * 2), maxHeight = Math.max(1, rect.height * .82 - inset * 2);
+  const maxWidth = Math.max(1, rect.width - width * Number(box.padXPct || 0) / 100 * 2 - inset * 2);
+  const maxHeight = Math.max(1, rect.height - width * Number(box.padYPct || 0) / 100 * 2 - inset * 2);
   const leading = Math.max(.8, Math.min(1.5, Number(style.lineHeight) || 1.08));
   const maxLines = Math.max(1, Math.min(4, Math.round(Number(style.maxLines) || 4)));
   const measure = (value, size) => {
