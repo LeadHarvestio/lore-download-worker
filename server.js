@@ -18,6 +18,7 @@ import { resolveTikTokVideoUrl } from "./download/tiktok.js";
 import { livePreviewRecipe } from "./render/live-preview.js";
 import { FONT_DIR } from "./render/headline.js";
 import { orderRenderJobs } from "./render/priority.js";
+import { createFaceAnalysisQueue } from "./render/face-analysis.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
@@ -25,6 +26,19 @@ app.use(express.json({ limit: "2mb" }));
 
 var API_KEY = process.env.API_KEY || "";
 var DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || "/tmp/downloads";
+var faceAnalysis = createFaceAnalysisQueue(DOWNLOAD_DIR, () => activeProcesses > 0, () => startQueuedProcessJobs());
+const faceTrackingReady = () => process.env.ENABLE_FACE_TRACKING === "1" && Boolean(API_KEY) && fs.existsSync(process.env.FACE_MODEL_PATH || "/app/render/yunet.onnx");
+app.post("/api/analyze/faces", auth, (req, res) => {
+  if (!faceTrackingReady()) return res.status(503).json({ error: "Face tracking is awaiting performance validation and activation." });
+  try { res.status(202).json(faceAnalysis.enqueue(req.body.clipFilename, req.body.force === true)); }
+  catch (error) { res.status(400).json({ error: error.message }); }
+});
+app.get("/api/analyze/faces/:jobId", auth, (req, res) => {
+  if (!API_KEY) return res.status(503).json({ error: "Worker authentication is not configured." });
+  const job = faceAnalysis.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Face analysis job not found or expired." });
+  res.set("Cache-Control", "no-store").json(job);
+});
 var jobs = new Map();
 var downloadQueue = createDownloadQueue({
   concurrency: 2,
@@ -187,7 +201,7 @@ function scheduleProcessedFileCleanup(jobId, filenames) {
 
 function startQueuedProcessJobs() {
   processQueue = orderRenderJobs(processQueue, processJobs);
-  while (activeProcesses < maxConcurrentProcesses && processQueue.length) {
+  while (!faceAnalysis.active && activeProcesses < maxConcurrentProcesses && processQueue.length) {
     const jobId = processQueue.shift();
     const job = processJobs.get(jobId);
     if (!job || job.status !== "queued") continue;
@@ -394,7 +408,7 @@ app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, subscribeOverlays: 1, captionReference: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, temporalEditing: 1, faceTracking: faceTrackingReady() ? 1 : 0, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, subscribeOverlays: 1, captionReference: 1 } });
 });
 
 app.get("/api/styles/fonts/:id", auth, function(req, res) {
