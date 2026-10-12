@@ -13,6 +13,10 @@ RUN apt-get update && \
 ENV PYTHON_BIN=/opt/whisper-venv/bin/python3 \
     WHISPER_MODEL=base
 
+# Face analysis stays feature-gated until deployment benchmarking passes.
+RUN /opt/whisper-venv/bin/pip install --no-cache-dir opencv-python-headless==4.11.0.86
+ENV FACE_MODEL_PATH=/app/render/yunet.onnx
+
 WORKDIR /app
 
 COPY package.json ./
@@ -21,6 +25,11 @@ RUN npm install --production
 
 COPY server.js video-processor.js transcribe.py ./
 COPY render ./render
+RUN curl --fail --location --retry 2 \
+    https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
+    -o /app/render/yunet.onnx && \
+    echo "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4  /app/render/yunet.onnx" | sha256sum -c - && \
+    /opt/whisper-venv/bin/python3 /app/render/analyze-faces.py --check
 COPY fonts ./fonts
 COPY download ./download
 

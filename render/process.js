@@ -5,13 +5,13 @@ import path from "path";
 import { renderHeadlinePng, FONT_DIR } from "./headline.js";
 import { buildAss } from "./captions.js";
 import { resolveStyle } from "./styles.js";
+import { validateSourceEdit, encodeSourceEdit } from "./source-edit.js";
 import { muteVolumeFilter } from "./censorship.js";
 import { headlinePosition, previewWords } from "./placement.js";
 import { layoutFilter, sourceSettings } from "./framing.js";
 import { createRenderCache, fileFingerprint, contentFingerprint } from "./cache.js";
 import { prepareCreativeInputs } from "./creative.js";
 import { prepareSoundEffects } from "./sound-effects.js";
-import { validateSourceEdit, encodeSourceEdit } from "./source-edit.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
@@ -61,26 +61,22 @@ export async function processClip(p) {
   const deadline = AbortSignal.timeout(10 * 60 * 1000);
   const leases = [];
   const hits = { background: false, voice: false, music: false };
+  try {
   let info = await probe(p.inputPath);
-  const originalFingerprint = fileFingerprint(p.inputPath);
-  let inputCacheKey = originalFingerprint;
+  if (p.sourceEdit !== undefined) {
+    const sourceEdit = validateSourceEdit(p.sourceEdit, info.duration);
+    const edited = await cache.acquire("source-edit-v1", { original: await fileFingerprint(p.inputPath), sourceEdit }, "mp4",
+      dest => encodeSourceEdit(p.inputPath, dest, sourceEdit, info.hasAudio, deadline));
+    leases.push(edited);
+    p = { ...p, inputPath: edited.file };
+    info = await probe(p.inputPath);
+  }
   const style = p.style;
   const source = sourceSettings(style.source);
   const preview = typeof p.previewAt === "number";
   const width = preview ? PREVIEW_W : OUT_W;
   const height = preview ? PREVIEW_H : OUT_H;
   fs.mkdirSync(p.workDir, { recursive: true });
-  try {
-  if (p.sourceEdit !== undefined) {
-    const sourceEdit = validateSourceEdit(p.sourceEdit, info.duration);
-    inputCacheKey = { original: originalFingerprint, sourceEdit };
-    const edited = await cache.acquire("source-edit-v1", inputCacheKey, "mp4",
-      dest => encodeSourceEdit(p.inputPath, dest, sourceEdit, info.hasAudio, deadline));
-    leases.push(edited);
-    p = { ...p, inputPath: edited.file };
-    info = await probe(p.inputPath);
-  }
-
   const hl = renderHeadlinePng({ text: p.headline.text, highlight: p.headline.highlight, width, height, style: style.headline });
   const hlPath = path.join(p.workDir, "headline.png");
   fs.writeFileSync(hlPath, hl.buffer);
@@ -94,14 +90,15 @@ export async function processClip(p) {
   const yTop = headlinePosition({ sourceWidth: info.width, sourceHeight: info.height,
     width, height, headline: hl, style });
   const secs = style.headline.seconds;
-  const enable = secs ? `:enable='between(t,0,${secs - (preview ? p.previewAt : 0)})'` : "";
+  const headlineStart = style.headline.startSeconds ?? 0;
+  const enable = secs || headlineStart ? `:enable='between(t,${headlineStart - (preview ? p.previewAt : 0)},${(secs || info.duration) - (preview ? p.previewAt : 0)})'` : "";
 
   // Clean stereo copies of the source audio and the music (see normalizeAudio)
   let voiceWav = null, musicWav = null;
   if (!preview) {
     if (info.hasAudio) {
       try {
-        const voice = await cache.acquire("voice-loudnorm-v1", inputCacheKey, "wav", dest => normalizeAudio(p.inputPath, dest, true, deadline));
+        const voice = await cache.acquire("voice-loudnorm-v1", fileFingerprint(p.inputPath), "wav", dest => normalizeAudio(p.inputPath, dest, true, deadline));
         leases.push(voice); voiceWav = voice.file; hits.voice = voice.hit;
       }
       catch (e) { throw new Error("Source audio could not be decoded: " + String(e.stderr || e.message).slice(0, 200)); }
@@ -124,7 +121,7 @@ export async function processClip(p) {
   let backgroundPath = p.inputPath;
   if (!preview) {
     const { muteAudio, ...geometry } = source;
-    const background = await cache.acquire("background-1080p-v1", { input: inputCacheKey, width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter }, "mp4", async dest => {
+    const background = await cache.acquire("background-1080p-v1", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter }, "mp4", async dest => {
       await run(process.env.FFMPEG_BIN || "ffmpeg", [
         "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1", "-i", p.inputPath,
         "-filter_complex", layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter),
@@ -149,7 +146,7 @@ export async function processClip(p) {
   const sounds = await prepareSoundEffects({ effects: style.soundEffects, args, nextIndex: creative.nextIndex,
     duration: info.duration, preview });
   const f = [
-    preview ? layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter) : "[0:v]setsar=1[base]",
+    preview ? layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.previewAt) : "[0:v]setsar=1[base]",
     ...creative.filters,
     `[1:v]format=rgba[hl]`,
     `[${creative.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
@@ -163,8 +160,10 @@ export async function processClip(p) {
   let mapAudio = [];
   if (!preview) {
     const gain = typeof p.musicDb === "number" ? p.musicDb : -15;
-    const fadeOutAt = Math.max(0, dur - 1).toFixed(2);
-    const music = `[${musicIdx}:a]atrim=0:${dur.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=${fadeOutAt}:d=1`;
+    const window = style.musicWindow;
+    const musicDuration = window ? Math.max(.1, Math.min(dur, window.endSeconds) - window.startSeconds) : dur;
+    const fadeOutAt = Math.max(0, musicDuration - 1).toFixed(2);
+    const music = `[${musicIdx}:a]atrim=0:${musicDuration.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=${fadeOutAt}:d=1${window ? `,adelay=${Math.round(window.startSeconds * 1000)}:all=1,apad=whole_dur=${dur.toFixed(2)}` : ""}`;
     if (musicWav && voiceWav) {
       f.push(`[${voiceIdx}:a]${voiceFilters}[voice]`);
       f.push(`${music},volume=${gain}dB,${STEREO}[mus]`);

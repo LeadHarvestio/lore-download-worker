@@ -87,7 +87,7 @@ test("re-edits reuse background and voice, but crop changes invalidate backgroun
     assert.equal(crop.renderStats.cacheHits.background, false);
     assert.equal(crop.renderStats.cacheHits.voice, true);
     const output = await probe(path.join(directory, "second.mp4"));
-    assert.equal(output.width, 1080); assert.equal(output.height, 1920);
+    assert.equal(output.width, 2160); assert.equal(output.height, 3840);
     assert.ok(output.hasAudio);
     await processClip({ inputPath, outputPath: path.join(directory, "gated.mp4"), workDir: path.join(directory, "gated"),
       headline: { text: "CENSOR TEST", highlight: [] }, style: resolveStyle("boxed_red"), words: [],

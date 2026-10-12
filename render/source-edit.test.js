@@ -41,7 +41,7 @@ for (const [name, segments, expected] of [
       const data = await streams(out);
       assert.ok(Math.abs(Number(data.format.duration) - expected) < .09);
       const v = data.streams.find(stream => stream.codec_type === "video"), a = data.streams.find(stream => stream.codec_type === "audio");
-      assert.ok(Math.abs(Number(v.duration) - Number(a.duration)) < .04, "stream durations stay within one output frame");
+      assert.ok(Math.abs(Number(v.duration) - Number(a.duration)) < 1 / 30 + .001, "stream durations stay within one output frame");
       const { stdout } = await run("ffmpeg", ["-v", "error", "-i", out, "-af", "aresample=async=1:first_pts=0", "-ac", "1", "-ar", "8000", "-f", "f32le", "-"], { encoding: "buffer" });
       let power = 0;
       for (let i = 0; i < stdout.length; i += 4) power += stdout.readFloatLE(i) ** 2;

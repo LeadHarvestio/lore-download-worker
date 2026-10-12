@@ -10,15 +10,18 @@ import { fileURLToPath } from "url";
 import os from "os";
 import { processVideo, previewFrame, validateStyleInput } from "./video-processor.js";
 import { PRESETS, FONTS } from "./render/styles.js";
-import { OUT_W, OUT_H, FPS, PREVIEW_W, PREVIEW_H, probe as probeSource } from "./render/process.js";
-import { validateSourceEdit } from "./render/source-edit.js";
+import { OUT_W, OUT_H, FPS, PREVIEW_W, PREVIEW_H } from "./render/process.js";
 import { transcriptionAudio } from "./render/transcription-audio.js";
+import { validateSourceEdit } from "./render/source-edit.js";
+import { probe as probeSource } from "./render/process.js";
+import { createThumbnailService } from "./render/thumbnails.js";
 import { createDownloadQueue } from "./download/queue.js";
 import { downloadErrorMessage } from "./download/errors.js";
 import { resolveTikTokVideoUrl } from "./download/tiktok.js";
 import { livePreviewRecipe } from "./render/live-preview.js";
 import { FONT_DIR } from "./render/headline.js";
 import { orderRenderJobs } from "./render/priority.js";
+import { createFaceAnalysisQueue } from "./render/face-analysis.js";
 
 var execFileAsync = promisify(execFile);
 var app = express();
@@ -26,6 +29,19 @@ app.use(express.json({ limit: "2mb" }));
 
 var API_KEY = process.env.API_KEY || "";
 var DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || "/tmp/downloads";
+var faceAnalysis = createFaceAnalysisQueue(DOWNLOAD_DIR, () => activeProcesses > 0, () => startQueuedProcessJobs());
+const faceTrackingReady = () => process.env.ENABLE_FACE_TRACKING === "1" && Boolean(API_KEY) && fs.existsSync(process.env.FACE_MODEL_PATH || "/app/render/yunet.onnx");
+app.post("/api/analyze/faces", auth, (req, res) => {
+  if (!faceTrackingReady()) return res.status(503).json({ error: "Face tracking is awaiting performance validation and activation." });
+  try { res.status(202).json(faceAnalysis.enqueue(req.body.clipFilename, req.body.force === true)); }
+  catch (error) { res.status(400).json({ error: error.message }); }
+});
+app.get("/api/analyze/faces/:jobId", auth, (req, res) => {
+  if (!API_KEY) return res.status(503).json({ error: "Worker authentication is not configured." });
+  const job = faceAnalysis.get(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Face analysis job not found or expired." });
+  res.set("Cache-Control", "no-store").json(job);
+});
 var jobs = new Map();
 var downloadQueue = createDownloadQueue({
   concurrency: 2,
@@ -169,10 +185,27 @@ function publicProcessJob(job) {
   };
 }
 
+const thumbnails = createThumbnailService(DOWNLOAD_DIR);
+app.post("/api/thumbnail", auth, async (req, res) => {
+  if (!API_KEY) return res.status(503).json({ error: "Worker authentication is not configured." });
+  try {
+    const bytes = await thumbnails.extract(req.body);
+    res.type(req.body.format === "png" ? "png" : "jpeg").set("Cache-Control", "private, no-store").send(bytes);
+  } catch (error) { res.status(error.status || 500).json({ error: error.message }); }
+});
+app.post("/api/thumbnail/hold", auth, (req, res) => {
+  if (!API_KEY) return res.status(503).json({ error: "Worker authentication is not configured." });
+  try { thumbnails.hold(req.body.filename, req.body.pending); res.json({ retained: req.body.pending }); }
+  catch (error) { res.status(error.status || 400).json({ error: error.message }); }
+});
 function scheduleProcessedFileCleanup(jobId, filenames) {
   const previous = processCleanupTimers.get(jobId);
   if (previous) clearTimeout(previous);
   const timer = setTimeout(function() {
+    if (filenames.some(filename => thumbnails.held(filename))) {
+      scheduleProcessedFileCleanup(jobId, filenames);
+      return;
+    }
     for (const filename of filenames) {
       const filePath = path.join(DOWNLOAD_DIR, filename);
       try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (error) {
@@ -188,7 +221,7 @@ function scheduleProcessedFileCleanup(jobId, filenames) {
 
 function startQueuedProcessJobs() {
   processQueue = orderRenderJobs(processQueue, processJobs);
-  while (activeProcesses < maxConcurrentProcesses && processQueue.length) {
+  while (!faceAnalysis.active && activeProcesses < maxConcurrentProcesses && processQueue.length) {
     const jobId = processQueue.shift();
     const job = processJobs.get(jobId);
     if (!job || job.status !== "queued") continue;
@@ -281,9 +314,9 @@ app.post("/api/process", auth, async function(req, res) {
   if (!headline || headline.length > 80) {
     return res.status(400).json({ error: "headline must be between 1 and 80 characters." });
   }
-  if (!Array.isArray(highlightWords) ||
-      highlightWords.some(function(word) { return typeof word !== "string" || word.length > 100; })) {
-    return res.status(400).json({ error: "highlightWords must be an array of strings." });
+  if (!Array.isArray(highlightWords) || highlightWords.length > 10 ||
+      highlightWords.some(function(word) { return typeof word !== "string" || word.length > 60; })) {
+    return res.status(400).json({ error: "highlightWords must be an array of up to 10 strings." });
   }
   if (musicUrl !== null && typeof musicUrl !== "string") {
     return res.status(400).json({ error: "musicUrl must be an HTTP(S) URL or null." });
@@ -342,13 +375,14 @@ app.post("/api/process", auth, async function(req, res) {
   if (body.sourceEdit !== undefined) {
     try { validateSourceEdit(body.sourceEdit, (await probeSource(clipPath)).duration); }
     catch (error) { return res.status(400).json({ error: error.message }); }
+    if (!Array.isArray(body.words)) return res.status(400).json({ error: "Source edits require saved output-time captions." });
   }
 
   processJobs.set(jobId, {
+    ...(body.sourceEdit !== undefined ? { sourceEdit: body.sourceEdit } : {}),
     jobId: jobId,
     status: "queued",
     clipFilename: clipFilename,
-    ...(body.sourceEdit !== undefined ? { sourceEdit: body.sourceEdit } : {}),
     headline: headline,
     highlightWords: highlightWords,
     musicUrl: musicUrl,
@@ -401,7 +435,7 @@ app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { sourceEdit: 1, soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, subscribeOverlays: 1, captionReference: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, headlineCoverStyle: 1, sourceEdit: 1, thumbnails: API_KEY ? 1 : 0, temporalEditing: 1, faceTracking: faceTrackingReady() ? 1 : 0, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, subscribeOverlays: 1, captionReference: 1 } });
 });
 
 app.get("/api/styles/fonts/:id", auth, function(req, res) {
@@ -416,7 +450,7 @@ app.post("/api/live-preview", auth, function(req, res) {
     validateStyleInput(body.stylePresetId, body.styleOverrides);
     if (typeof body.headline !== "string" || !body.headline.trim() || body.headline.length > 80) throw new Error("Provide a headline of up to 80 characters.");
     if (body.censorCaptions !== undefined && typeof body.censorCaptions !== "boolean") throw new Error("censorCaptions must be boolean.");
-    if (body.highlightWords !== undefined && (!Array.isArray(body.highlightWords) || body.highlightWords.some(w => typeof w !== "string" || w.length > 100))) throw new Error("Invalid headline highlights.");
+    if (body.highlightWords !== undefined && (!Array.isArray(body.highlightWords) || body.highlightWords.length > 10 || body.highlightWords.some(w => typeof w !== "string" || w.length > 60))) throw new Error("Invalid headline highlights.");
     if (body.words !== undefined && (!Array.isArray(body.words) || body.words.length > 5000 || body.words.some(w =>
       typeof w?.word !== "string" || w.word.length > 200 || !Number.isFinite(w.start) || !Number.isFinite(w.end) || w.start < 0 || w.end < w.start))) throw new Error("Invalid cached caption words.");
     return res.set("Cache-Control", "no-store").json(livePreviewRecipe(body));
