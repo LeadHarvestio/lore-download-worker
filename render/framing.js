@@ -1,9 +1,12 @@
 import { sourceVideoFilter } from "./video-filters.js";
+import { faceTrackingSchema } from "./face-tracking-core.js";
+import { trackedLayoutFilter } from "./tracking-framing.js";
 // Keep source editing identical between style frames and finished MP4s.
 export function sourceSettings(source = {}) {
   if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("source must be an object.");
   const result = { cropLeftPct: 0, cropRightPct: 0, cropTopPct: 0, cropBottomPct: 0, zoom: 1, muteAudio: false, xPct: 50, yPct: 50 };
   for (const key of Object.keys(source)) {
+    if (key === "tracking") { result.tracking = faceTrackingSchema.parse(source.tracking); continue; }
     if (!Object.hasOwn(result, key)) throw new Error(`Unknown source setting: ${key}`);
     const value = source[key];
     if (key === "muteAudio") {
@@ -26,8 +29,9 @@ export function foregroundGeometry(sourceWidth, sourceHeight, width, height, sou
   return { croppedWidth, croppedHeight, width: even(croppedWidth * scale), height: even(croppedHeight * scale) };
 }
 
-export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, source = {}, videoFilter = {}) {
+export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, source = {}, videoFilter = {}, previewAt) {
   const settings = sourceSettings(source);
+  if (settings.tracking?.enabled) return trackedLayoutFilter(layout, width, height, sourceWidth, sourceHeight, settings, videoFilter, previewAt);
   const look = sourceVideoFilter(videoFilter);
   if (layout === "fill") {
     if (settings.xPct === 50 && settings.yPct === 50) return `[0:v]fps=30,${look}scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[base]`;

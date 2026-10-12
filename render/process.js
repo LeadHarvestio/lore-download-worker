@@ -82,7 +82,8 @@ export async function processClip(p) {
   const yTop = headlinePosition({ sourceWidth: info.width, sourceHeight: info.height,
     width, height, headline: hl, style });
   const secs = style.headline.seconds;
-  const enable = secs ? `:enable='between(t,0,${secs - (preview ? p.previewAt : 0)})'` : "";
+  const headlineStart = style.headline.startSeconds ?? 0;
+  const enable = secs || headlineStart ? `:enable='between(t,${headlineStart - (preview ? p.previewAt : 0)},${(secs || info.duration) - (preview ? p.previewAt : 0)})'` : "";
 
   // Clean stereo copies of the source audio and the music (see normalizeAudio)
   let voiceWav = null, musicWav = null;
@@ -137,7 +138,7 @@ export async function processClip(p) {
   const sounds = await prepareSoundEffects({ effects: style.soundEffects, args, nextIndex: creative.nextIndex,
     duration: info.duration, preview });
   const f = [
-    preview ? layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter) : "[0:v]setsar=1[base]",
+    preview ? layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.previewAt) : "[0:v]setsar=1[base]",
     ...creative.filters,
     `[1:v]format=rgba[hl]`,
     `[${creative.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
@@ -151,8 +152,10 @@ export async function processClip(p) {
   let mapAudio = [];
   if (!preview) {
     const gain = typeof p.musicDb === "number" ? p.musicDb : -15;
-    const fadeOutAt = Math.max(0, dur - 1).toFixed(2);
-    const music = `[${musicIdx}:a]atrim=0:${dur.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=${fadeOutAt}:d=1`;
+    const window = style.musicWindow;
+    const musicDuration = window ? Math.max(.1, Math.min(dur, window.endSeconds) - window.startSeconds) : dur;
+    const fadeOutAt = Math.max(0, musicDuration - 1).toFixed(2);
+    const music = `[${musicIdx}:a]atrim=0:${musicDuration.toFixed(2)},asetpts=PTS-STARTPTS,afade=t=in:d=0.5,afade=t=out:st=${fadeOutAt}:d=1${window ? `,adelay=${Math.round(window.startSeconds * 1000)}:all=1,apad=whole_dur=${dur.toFixed(2)}` : ""}`;
     if (musicWav && voiceWav) {
       f.push(`[${voiceIdx}:a]${voiceFilters}[voice]`);
       f.push(`${music},volume=${gain}dB,${STEREO}[mus]`);

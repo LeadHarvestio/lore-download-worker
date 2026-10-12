@@ -118,6 +118,11 @@ export function resolveStyle(presetId, overrides = {}) {
   // Do not add fields to PRESETS: older published app schemas remain compatible.
   result.videoFilter = videoFilterSettings(result.videoFilter);
   result.musicStartSeconds = result.musicStartSeconds ?? 0;
+  if (result.musicWindow && (!Object.values(result.musicWindow).every(Number.isFinite)
+    || result.musicWindow.startSeconds < 0 || result.musicWindow.endSeconds <= result.musicWindow.startSeconds || result.musicWindow.endSeconds > 1800))
+    throw new Error("Invalid music timeline window.");
+  if (result.headline.startSeconds !== undefined && (!Number.isFinite(result.headline.startSeconds) || result.headline.startSeconds < 0 || result.headline.startSeconds > 1800))
+    throw new Error("Invalid headline start time.");
   if (typeof result.musicStartSeconds !== "number" || !Number.isFinite(result.musicStartSeconds) ||
       result.musicStartSeconds < 0 || result.musicStartSeconds > 10800) throw new Error("Invalid music start time.");
   if (overrides?.headline?.yPct !== undefined && overrides.headline.autoPosition === undefined) {

@@ -1,7 +1,7 @@
-import { createCanvas, GlobalFonts, Image } from "@napi-rs/canvas";
+import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
 import path from "path";
 import { fileURLToPath } from "url";
-import { FONTS } from "./styles.js";
+import { FONTS, PRESETS } from "./styles.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const FONT_DIR = path.join(__dirname, "..", "fonts");
@@ -18,6 +18,7 @@ export function loadFonts() {
 }
 
 const norm = (w) => w.toLowerCase().replace(/[^a-z0-9]/g, "");
+const PRESET_HEADLINE_MIN_SIZE_PCT = Math.min(...Object.values(PRESETS).map(preset => Number(preset.headline?.sizePct) || 100));
 
 // highlight: array of strings. A word is highlighted if it matches a single
 // highlight word, or belongs to a multi-word highlight phrase ("REGGIE KISSING").
@@ -107,33 +108,162 @@ function measureWord(ctx, text, size, family) {
     actualBoundingBoxDescent: Math.max(0, ...runs.map(r => r.descent)), runs };
 }
 
+function renderHeadlineCover({ text, highlight, width, height, style, cover }) {
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  const boxWidth = Math.max(1, Math.round(width * cover.widthPct / 100));
+  const boxHeight = Math.max(1, Math.round(height * cover.heightPct / 100));
+  const rect = {
+    x: Math.max(0, Math.min(width - boxWidth, Math.round(width * cover.xPct / 100 - boxWidth / 2))),
+    y: Math.max(0, Math.min(height - boxHeight, Math.round(height * cover.yPct / 100 - boxHeight / 2))),
+    width: boxWidth,
+    height: boxHeight,
+  };
+  const family = FONTS[style.font]?.family || "Anton";
+  const box = style.box || {};
+  const stroke = style.stroke || {};
+  const shadow = style.shadow || {};
+  const glow = style.glow || {};
+  const boxPadX = box.enabled ? Math.min(rect.width * .3, width * Number(box.padXPct || 0) / 100) : 0;
+  const boxPadY = box.enabled ? Math.min(rect.height * .3, width * Number(box.padYPct || 0) / 100) : 0;
+  const strokeBleed = stroke.enabled ? width * Number(stroke.widthPct || 0) / 100 + 2 : 0;
+  const shadowBleedX = shadow.enabled ? width * (Number(shadow.blurPct || 0) * 2.5 + Math.abs(Number(shadow.offsetXPct || 0))) / 100 : 0;
+  const shadowBleedY = shadow.enabled ? width * (Number(shadow.blurPct || 0) * 2.5 + Math.abs(Number(shadow.offsetYPct || 0))) / 100 : 0;
+  const glowBleed = glow.enabled ? width * Number(glow.blurPct || 0) * 2.5 / 100 : 0;
+  const insetX = Math.max(width * .004, strokeBleed, shadowBleedX, glowBleed);
+  const insetY = Math.max(width * .004, strokeBleed, shadowBleedY, glowBleed);
+  const maxTextW = Math.max(1, Math.min(
+    rect.width - boxPadX * 2 - insetX * 2,
+    width * Math.max(.5, Math.min(100, Number(style.maxWidthPct) || 100)) / 100,
+  ));
+  const availableHeight = Math.max(1, rect.height - boxPadY * 2 - insetY * 2);
+  const probe = createCanvas(10, 10).getContext("2d");
+  const sizeStart = Math.max(1, width * Number(style.sizePct || 8) / 100);
+  const maxLines = Math.max(1, Math.min(4, Math.round(Number(style.maxLines) || 4)));
+  const tokens = tokenize(text, highlight, style.uppercase !== false);
+  let size = sizeStart, lines = [], spaceW = 0;
+  const measuring = { measureText: value => measureWord(probe, value, size, family) };
+  for (let attempt = 0; attempt < 80; attempt++) {
+    probe.font = `${size}px "${family}", "Anton", sans-serif`;
+    spaceW = probe.measureText(" ").width * .9;
+    lines = wrap(measuring, tokens, maxTextW, spaceW);
+    const widest = Math.max(0, ...lines.map(line => line.width));
+    const ink = lines.map(line => {
+      const metrics = line.tokens.map(token => measuring.measureText(token.text));
+      return {
+        ascent: Math.max(0, ...metrics.map(metric => metric.actualBoundingBoxAscent)),
+        descent: Math.max(0, ...metrics.map(metric => metric.actualBoundingBoxDescent)),
+      };
+    });
+    const ascent = Math.max(0, ...ink.map(metric => metric.ascent));
+    const descent = Math.max(0, ...ink.map(metric => metric.descent));
+    const inkHeight = ascent + descent;
+    const lineAdvance = Math.max(inkHeight, inkHeight * Math.max(.8, Math.min(1.5, Number(style.lineHeight) || 1.08)));
+    const textHeight = inkHeight + lineAdvance * Math.max(0, lines.length - 1);
+    if (lines.length <= maxLines && widest <= maxTextW && textHeight <= availableHeight) break;
+    size *= .94;
+  }
+  if (lines.length > 1 && (lines.at(-1)?.tokens.length === 1 || (lines.at(-1)?.width || 0) < Math.max(...lines.map(line => line.width)) * .55)) {
+    lines = balance(measuring, tokens, lines, spaceW);
+  }
+  const ink = lines.map(line => {
+    const metrics = line.tokens.map(token => measuring.measureText(token.text));
+    return {
+      ascent: Math.max(0, ...metrics.map(metric => metric.actualBoundingBoxAscent)),
+      descent: Math.max(0, ...metrics.map(metric => metric.actualBoundingBoxDescent)),
+    };
+  });
+  const ascent = Math.max(0, ...ink.map(metric => metric.ascent));
+  const descent = Math.max(0, ...ink.map(metric => metric.descent));
+  const inkHeight = ascent + descent;
+  const lineAdvance = Math.max(inkHeight, inkHeight * Math.max(.8, Math.min(1.5, Number(style.lineHeight) || 1.08)));
+  const textHeight = inkHeight + lineAdvance * Math.max(0, lines.length - 1);
+  const textWidth = Math.max(0, ...lines.map(line => line.width));
+  const contentWidth = rect.width - boxPadX * 2 - insetX * 2;
+  const contentHeight = rect.height - boxPadY * 2 - insetY * 2;
+
+  if (box.enabled) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, Number(box.opacity ?? 1)));
+    ctx.fillStyle = box.color || "#FFFFFF";
+    roundRect(ctx, rect.x, rect.y, rect.width, rect.height, Math.min(width * Number(box.radiusPct || 0) / 100, rect.width / 2, rect.height / 2));
+    ctx.fill();
+    ctx.restore();
+  }
+
+  const drawPasses = [];
+  if (glow.enabled) drawPasses.push("glow");
+  if (shadow.enabled) drawPasses.push("shadow");
+  if (stroke.enabled) drawPasses.push("stroke");
+  drawPasses.push("fill");
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(rect.x, rect.y, rect.width, rect.height);
+  ctx.clip();
+  ctx.textBaseline = "alphabetic";
+  ctx.lineJoin = "round";
+  for (const pass of drawPasses) {
+    lines.forEach((line, lineIndex) => {
+      let x = rect.x + boxPadX + insetX + (contentWidth - line.width) / 2;
+      const baseline = rect.y + boxPadY + insetY + Math.max(0, (contentHeight - textHeight) / 2) + ascent + lineIndex * lineAdvance;
+      for (const token of line.tokens) {
+        const measured = measureWord(ctx, token.text, size, family);
+        const color = token.hl ? style.highlightColor || style.textColor : style.textColor;
+        const paint = mode => {
+          let runX = x;
+          for (const run of measured.runs) {
+            ctx.font = run.font;
+            ctx[mode](run.text, runX, baseline);
+            runX += run.width;
+          }
+        };
+        ctx.save();
+        if (pass === "glow") {
+          ctx.shadowColor = token.hl ? glow.color || "#FFFFFF" : hexA(glow.color || "#FFFFFF", 0);
+          ctx.shadowBlur = width * Number(glow.blurPct || 0) / 100;
+          ctx.fillStyle = color;
+          for (let strength = 0; strength < Math.max(1, Math.min(8, Math.round(Number(glow.strength) || 1))); strength++) paint("fillText");
+        } else if (pass === "shadow") {
+          ctx.shadowColor = hexA(shadow.color || "#000000", Math.max(0, Math.min(1, Number(shadow.opacity ?? .45))));
+          ctx.shadowBlur = width * Number(shadow.blurPct || 0) / 100;
+          ctx.shadowOffsetX = width * Number(shadow.offsetXPct || 0) / 100;
+          ctx.shadowOffsetY = width * Number(shadow.offsetYPct || 0) / 100;
+          ctx.fillStyle = color;
+          paint("fillText");
+        } else if (pass === "stroke") {
+          ctx.strokeStyle = stroke.color || "#000000";
+          ctx.lineWidth = width * Number(stroke.widthPct || 0) / 100 * 2;
+          paint("strokeText");
+        } else {
+          ctx.fillStyle = color || "#FFFFFF";
+          paint("fillText");
+        }
+        ctx.restore();
+        x += measured.width + spaceW;
+      }
+    });
+  }
+  ctx.restore();
+  const actualSizePct = size / width * 100;
+  const requestedSizePct = Number(style.sizePct) || 0;
+  const outsidePresetLimits = actualSizePct < PRESET_HEADLINE_MIN_SIZE_PCT || Number(style.maxLines) > 4;
+  return {
+    buffer: canvas.toBuffer("image/png"), width, height, lines: lines.length, fontSize: size,
+    visibleBox: rect, lineAdvance, inkHeight,
+    fitMetadata: { requestedSizePct, actualSizePct, presetMinimumSizePct: PRESET_HEADLINE_MIN_SIZE_PCT, outsidePresetLimits },
+    metadataHint: outsidePresetLimits ? "Cover fit required a size or line count outside built-in preset limits." : null,
+  };
+}
+
 export function renderHeadlinePng({ text, highlight, width, height, style }) {
   loadFonts();
   if (style.coverBox) {
     const cover = style.coverBox;
     if (!["xPct", "yPct", "widthPct", "heightPct"].every(k => Number.isFinite(cover[k])) ||
       cover.widthPct < 1 || cover.widthPct > 100 || cover.heightPct < 1 || cover.heightPct > 100 ||
-      cover.xPct < 0 || cover.xPct > 100 || cover.yPct < 0 || cover.yPct > 100) throw Error("Invalid headline cover bounds.");
-    const cw = Math.round(width * cover.widthPct / 100), ch = Math.round(height * cover.heightPct / 100);
-    const padding = Math.min(width * .01, cw / 8, ch / 8);
-    const inner = renderHeadlinePng({ text, highlight, width, height,
-      style: { ...style, coverBox: null, maxWidthPct: Math.max(.5, (cw - padding * 2) / width * 100),
-        box: { ...style.box, enabled: false }, glow: { ...style.glow, enabled: false },
-        shadow: { ...style.shadow, enabled: false } } });
-    const b = inner.visibleBox;
-    const scale = Math.min((cw - padding * 2) / Math.max(1, b.width), (ch - padding * 2) / Math.max(1, b.height));
-    const canvas = createCanvas(cw, ch), ctx = canvas.getContext("2d");
-    const rgb = /^#([0-9a-f]{6})$/i.exec(style.textColor)?.[1] || "FFFFFF";
-    const luminance = parseInt(rgb.slice(0, 2), 16) * .299 + parseInt(rgb.slice(2, 4), 16) * .587 + parseInt(rgb.slice(4, 6), 16) * .114;
-    ctx.fillStyle = style.box.enabled ? style.box.color : luminance > 150 ? "#101115" : "#FFFFFF";
-    ctx.fillRect(0, 0, cw, ch);
-    const image = new Image(); image.src = inner.buffer;
-    ctx.save(); ctx.beginPath(); ctx.rect(padding, padding, cw - padding * 2, ch - padding * 2); ctx.clip();
-    ctx.drawImage(image, b.x, b.y, b.width, b.height, (cw - b.width * scale) / 2, (ch - b.height * scale) / 2, b.width * scale, b.height * scale);
-    ctx.restore();
-    return { buffer: canvas.toBuffer("image/png"), width: cw, height: ch, lines: inner.lines,
-      fontSize: inner.fontSize * scale, visibleBox: { x: 0, y: 0, width: cw, height: ch },
-      lineAdvance: inner.lineAdvance * scale, inkHeight: inner.inkHeight * scale };
+      cover.xPct < cover.widthPct / 2 || cover.xPct > 100 - cover.widthPct / 2 ||
+      cover.yPct < cover.heightPct / 2 || cover.yPct > 100 - cover.heightPct / 2) throw Error("Invalid headline cover bounds.");
+    return renderHeadlineCover({ text, highlight, width, height, style, cover });
   }
   const S = style;
   const family = FONTS[S.font]?.family || "Anton";
@@ -255,6 +385,32 @@ export function renderHeadlinePng({ text, highlight, width, height, style }) {
 
   return { buffer: canvas.toBuffer("image/png"), width: cw, height: ch, lines: lines.length, fontSize: size,
     visibleBox: { x: bx, y: by, width: boxW, height: boxH }, lineAdvance: lineH, inkHeight: inkH };
+}
+
+export function headlineCoverFixtureBoxes(width = 1080, height = 1920, count = 20, seed = 0x5192a7) {
+  let state = seed >>> 0;
+  const random = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x100000000;
+  };
+  return Array.from({ length: Math.max(1, Math.min(100, Math.floor(count))) }, () => {
+    const widthPct = 8 + random() * 72;
+    const heightPct = 6 + random() * 42;
+    return {
+      widthPct,
+      heightPct,
+      xPct: widthPct / 2 + random() * (100 - widthPct),
+      yPct: heightPct / 2 + random() * (100 - heightPct),
+    };
+  });
+}
+
+export function renderHeadlineCoverFixtures({ text = "A PERSISTENT SOURCE HEADLINE", highlight = [], width = 1080, height = 1920, style, count = 20 }) {
+  return headlineCoverFixtureBoxes(width, height, count).map((coverBox, index) => ({
+    index,
+    coverBox,
+    ...renderHeadlinePng({ text, highlight, width, height, style: { ...style, coverBox } }),
+  }));
 }
 
 function roundRect(ctx, x, y, w, h, r, startPath = true) {
