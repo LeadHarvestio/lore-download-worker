@@ -1,4 +1,4 @@
-import { smoothFaceTrack } from "./face-tracking-core.js";
+import { smoothFaceTrack, trackedForegroundGeometry } from "./face-tracking-core.js";
 import { sourceVideoFilter } from "./video-filters.js";
 const even = n => Math.max(2, Math.round(n / 2) * 2);
 /** Balanced expression tree: hundreds of keyframes do not exceed FFmpeg's
@@ -18,21 +18,15 @@ export function trackExpression(points, key, time = "t") {
 }
 export function trackedLayoutFilter(layout, width, height, sw, sh, settings, look, at) {
   const tracking = settings.tracking;
-  const cw = even(sw * (1 - (settings.cropLeftPct + settings.cropRightPct) / 100));
-  const ch = even(sh * (1 - (settings.cropTopPct + settings.cropBottomPct) / 100));
-  const zoom = Math.max(settings.zoom, tracking.zoom);
-  const scale = (layout === "fill" ? Math.max(width / cw, height / ch) : Math.min(width / cw, height / ch)) * zoom;
-  const fw = even(cw * scale), fh = even(ch * scale), vh = Math.min(height, fh / zoom);
-  const croppedTrack = tracking.track.map(p => ({ ...p,
-    x: (p.x - settings.cropLeftPct / 100) / (cw / sw), w: p.w / (cw / sw),
-    y: (p.y - settings.cropTopPct / 100) / (ch / sh), h: p.h / (ch / sh),
-  }));
+  const geometry = trackedForegroundGeometry(sw, sh, width, height, layout, settings, tracking, { t: 0, x: .5, y: .5 });
+  const { cropWidth: cw, cropHeight: ch, cropX, cropY, foregroundWidth: fw, foregroundHeight: fh } = geometry;
+  const zoom = Math.max(settings.zoom, tracking.zoom), vh = layout === "fill" ? height : Math.min(height, fh / zoom);
   const duration = Math.max(tracking.endSeconds, ...tracking.track.map(p => p.t), .1);
-  const camera = smoothFaceTrack({ ...tracking, track: croppedTrack }, duration);
+  const camera = smoothFaceTrack(tracking, duration);
   const t = at === undefined ? "t" : String(at);
-  const x = `min(max(${width / 2}-${fw}*(${trackExpression(camera, "x", t)}),${Math.min(0, width - fw)}),${Math.max(0, (width - fw) / 2)})`;
-  const y = `min(max(${height / 2}-${fh}*(${trackExpression(camera, "y", t)}),${(height - vh) / 2 + vh - fh}),${(height - vh) / 2})`;
-  const crop = `crop=${cw}:${ch}:${even(sw * settings.cropLeftPct / 100) - 2}:${even(sh * settings.cropTopPct / 100) - 2},`;
+  const x = `min(max(${width / 2}-${fw}*((${sw}*(${trackExpression(camera, "x", t)})-${cropX})/${cw}),${Math.min(0, width - fw)}),${Math.max(0, (width - fw) / 2)})`;
+  const y = `min(max(${height / 2}-${fh}*((${sh}*(${trackExpression(camera, "y", t)})-${cropY})/${ch}),${(height - vh) / 2 + vh - fh}),${(height - vh) / 2})`;
+  const crop = `crop=${cw}:${ch}:${cropX}:${cropY},`;
   const filter = sourceVideoFilter(look);
   if (layout === "fill") return `[0:v]fps=30,${crop}${filter}scale=${fw}:${fh},crop=${width}:${height}:x='${width / 2}-(${x})-${width / 2}':y='-(${y})',setsar=1[base]`;
   return [

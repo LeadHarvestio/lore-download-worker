@@ -23,10 +23,21 @@ export function sourceVideoFilter(value = {}) {
   const p = videoFilterSettings(value), [b, c, s, sharp, warm] = VIDEO_FILTER_PRESETS[p.preset], a = p.strength;
   const brightness = b * a + p.brightness, contrast = (1 + (c - 1) * a) * p.contrast;
   const saturation = (1 + (s - 1) * a) * p.saturation, sharpness = sharp * a + p.sharpness;
-  const filters = [];
-  if (brightness !== 0 || contrast !== 1 || saturation !== 1)
-    filters.push(`eq=brightness=${brightness}:contrast=${contrast}:saturation=${saturation}`);
-  if (warm * a) filters.push(`colorbalance=rs=${warm * a}:bs=${-warm * a}`);
-  if (sharpness) filters.push(`unsharp=5:5:${sharpness}:5:5:0`);
-  return filters.length ? filters.join(",") + "," : "";
+  if (brightness === 0 && contrast === 1 && saturation === 1 && !(warm * a) && !sharpness) return "";
+  // Version 2, shared with browser WebGL: full-range RGB throughout the look.
+  // Brightness is additive, contrast is centered, warmth is a channel offset.
+  const lut = offset => `'clip((val-127.5)*${contrast}+127.5+${255 * offset},0,255)'`;
+  const filters = ["format=gbrp", `lutrgb=r=${lut(brightness + warm * a)}:g=${lut(brightness)}:b=${lut(brightness - warm * a)}`];
+  if (saturation !== 1) {
+    const weights = [.2126, .7152, .0722];
+    const keys = [["rr","rg","rb"],["gr","gg","gb"],["br","bg","bb"]];
+    filters.push("colorchannelmixer=" + keys.flatMap((row,i) => row.map((key,j) => `${key}=${weights[j]*(1-saturation)+(i===j?saturation:0)}`)).join(":"));
+  }
+  const amount = Math.round(Math.min(1.5, Math.max(0, sharpness)) * 256);
+  if (amount) {
+    const matrix = `0 ${-amount} 0 ${-amount} ${256+4*amount} ${-amount} 0 ${-amount} 0`;
+    filters.push(`convolution=0m='${matrix}':1m='${matrix}':2m='${matrix}':0rdiv=0.00390625:1rdiv=0.00390625:2rdiv=0.00390625`);
+  }
+  filters.push("format=yuv420p");
+  return filters.join(",") + ",";
 }

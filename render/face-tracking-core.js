@@ -1,4 +1,4 @@
-// Generated from app shared/face-tracking.ts; keep smoothing/validation in parity.
+// Generated from app shared/face-tracking.ts; keep smoothing/geometry in parity.
 import { z } from "zod";
 export const facePointSchema = z.object({
     t: z.number().finite().min(0).max(1800), x: z.number().finite().min(0).max(1), y: z.number().finite().min(0).max(1),
@@ -34,7 +34,9 @@ export function smoothFaceTrack(settings, duration, manual = { x: .5, y: .5 }) {
         return [{ t: 0, ...manual }, { t: duration, ...manual }];
     const result = [], step = Math.max(.1, duration / 599);
     let previous = { x: input[0].x + input[0].w / 2, y: input[0].y + input[0].h / 2 }, index = 0;
-    const alpha = Math.max(.035, 1 - settings.smoothness), dead = settings.deadZonePct / 100;
+    const velocity = { x: 0, y: 0 };
+    const dead = settings.deadZonePct / 100;
+    const response = .18 + settings.smoothness * .65;
     for (let t = 0; t <= duration + .00001 && result.length < 600; t += step) {
         while (index + 1 < input.length && input[index + 1].t <= t)
             index++;
@@ -50,14 +52,47 @@ export function smoothFaceTrack(settings, duration, manual = { x: .5, y: .5 }) {
         }
         if (t < settings.startSeconds || t > settings.endSeconds)
             target = manual;
-        const advance = (key) => {
-            const delta = target[key] - previous[key];
-            return Math.abs(delta) <= dead ? previous[key] : previous[key] + clamp(delta * alpha, -.45 * step, .45 * step);
-        };
-        previous = { x: advance("x"), y: advance("y") };
+        // Subtract the dead zone rather than switching movement on/off at its edge.
+        // Integrate a critically damped spring in small, time-based steps: entering
+        // the dead zone slows the camera instead of abruptly resetting its velocity.
+        if (t > 0) {
+            const iterations = Math.ceil(step * 60), dt = step / iterations;
+            for (let n = 0; n < iterations; n++) {
+                for (const key of ["x", "y"]) {
+                    const delta = target[key] - previous[key];
+                    const error = Math.sign(delta) * Math.max(0, Math.abs(delta) - dead);
+                    const acceleration = clamp(error / (response * response) - 2 * velocity[key] / response, -1.2, 1.2);
+                    velocity[key] = clamp(velocity[key] + acceleration * dt, -.45, .45);
+                    previous[key] = clamp(previous[key] + velocity[key] * dt, 0, 1);
+                }
+            }
+        }
         result.push({ t: Math.min(duration, t), x: clamp(previous.x, 0, 1), y: clamp(previous.y, 0, 1) });
     }
+    if (result.at(-1).t < duration)
+        result[result.length - 1] = { ...result.at(-1), t: duration };
     return result;
+}
+/** Face coordinates are source focus points, NOT the foreground's position.
+ * Shared by browser and FFmpeg; blurfit never moves its background.
+ */
+export function trackedForegroundGeometry(sw, sh, width, height, layout, source, tracking, camera) {
+    const even = (n) => Math.max(2, Math.round(n / 2) * 2);
+    const left = source.cropLeftPct ?? 0, top = source.cropTopPct ?? 0;
+    const cropWidth = Math.max(2, Math.floor(sw * (1 - (left + (source.cropRightPct ?? 0)) / 100) / 2) * 2);
+    const cropHeight = Math.max(2, Math.floor(sh * (1 - (top + (source.cropBottomPct ?? 0)) / 100) / 2) * 2);
+    const cropX = Math.floor(sw * left / 100 / 2) * 2, cropY = Math.floor(sh * top / 100 / 2) * 2;
+    const zoom = Math.max(source.zoom ?? 1, tracking.zoom);
+    const fit = layout === "fill" ? Math.max(width / cropWidth, height / cropHeight) : Math.min(width / cropWidth, height / cropHeight);
+    const foregroundWidth = even(cropWidth * fit * zoom), foregroundHeight = even(cropHeight * fit * zoom);
+    const focusX = (camera.x * sw - cropX) / cropWidth, focusY = (camera.y * sh - cropY) / cropHeight;
+    const viewportHeight = layout === "fill" ? height : Math.min(height, foregroundHeight / zoom);
+    const minX = Math.min(0, width - foregroundWidth), maxX = Math.max(0, (width - foregroundWidth) / 2);
+    const minY = (height - viewportHeight) / 2 + viewportHeight - foregroundHeight, maxY = (height - viewportHeight) / 2;
+    const foregroundX = clamp(width / 2 - foregroundWidth * focusX, minX, maxX);
+    const foregroundY = clamp(height / 2 - foregroundHeight * focusY, minY, maxY);
+    return { cropX, cropY, cropWidth, cropHeight, foregroundWidth, foregroundHeight, foregroundX, foregroundY,
+        centerX: foregroundX + foregroundWidth / 2, centerY: foregroundY + foregroundHeight / 2 };
 }
 export function cameraAt(track, t) {
     if (!track.length)

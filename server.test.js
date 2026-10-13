@@ -135,6 +135,8 @@ test("authenticated worker downloads a clip, renders it, and serves the MP4 and 
   assert.equal(unauthenticatedFiles.status, 401);
   const authenticatedFiles = await fetch(`${baseUrl}/api/debug/files`, { headers: authHeaders });
   assert.equal(authenticatedFiles.status, 200);
+  const styleCatalog = await fetch(`${baseUrl}/api/styles`, { headers: authHeaders });
+  assert.equal((await styleCatalog.json()).capabilities.colorProcessing, 2);
 
   const downloadResponse = await fetch(`${baseUrl}/api/download`, jsonOptions(authHeaders, {
     assetId: "fixture-clip",
@@ -168,6 +170,14 @@ test("authenticated worker downloads a clip, renders it, and serves the MP4 and 
     captionStyle: "word-by-word",
     musicVolumeDb: -15,
     outputAspectRatio: "9:16",
+    styleOverrides: {
+      layout: "fill",
+      videoFilter: { preset: "warm", brightness: .05, contrast: 1.15, sharpness: .2 },
+      source: { tracking: { enabled: true, mode: "selectedFace", faceId: "fixture-face",
+        zoom: 1.3, smoothness: .8, deadZonePct: 2, startSeconds: 0, endSeconds: 2,
+        track: [{ t: 0, x: .2, y: .2, w: .2, h: .2, confidence: .9, faceId: "fixture-face" },
+          { t: 2, x: .5, y: .3, w: .2, h: .2, confidence: .9, faceId: "fixture-face" }] } },
+    },
   }));
   const accepted = await processResponse.json();
   assert.equal(processResponse.status, 202, JSON.stringify(accepted));
