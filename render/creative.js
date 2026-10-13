@@ -180,12 +180,26 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
           !Number.isFinite(amount) || amount < 0 || amount > .08 ||
           !Number.isFinite(glow) || glow < 0 || glow > 1) throw new Error("Invalid subtle flicker controls.");
       // Source layers only: text/caption composition happens after this stage.
-      const pulse = `${amount}*(0.5-0.5*cos(2*PI*${speed}*(T+${offset}-${effect.startSeconds})))`;
-      const light = `A+(255-A)*(${pulse})`;
-      const expression = `${light}+(255-(${light}))*B/255*(${pulse})*${glow}`;
-      filters.push(`[${current}]format=gbrp,split=2[flickerbase${n}][flickerbloom${n}]`);
+      // Evaluate the pulse once per output frame, not millions of times per
+      // pixel. Native screen blends implement the same white lift + bloom.
+      const pulseAt = time => time < effect.startSeconds || time >= effect.endSeconds ? 0 :
+        amount * (.5 - .5 * Math.cos(2 * Math.PI * speed * (time - effect.startSeconds)));
+      const initial = pulseAt(offset);
+      const commands = [];
+      if (previewAt === undefined) {
+        if (!Number.isFinite(duration) || duration < 0) throw new Error("Invalid flicker duration.");
+        for (let frame = Math.max(0, Math.ceil(effect.startSeconds * 30));
+             frame <= Math.ceil(Math.min(duration, effect.endSeconds) * 30); frame++) {
+          const time = frame / 30, pulse = pulseAt(time);
+          commands.push(`${time.toFixed(6)} blend@flickerflash${n} all_opacity ${pulse.toFixed(8)}, blend@flickerbloom${n} all_opacity ${(pulse * glow).toFixed(8)}`);
+        }
+      }
+      const clock = commands.length ? `sendcmd=c='${commands.join(";")}',` : "";
+      filters.push(`[${current}]${clock}format=gbrp,split=3[flickerbase${n}][flickerbloom${n}][flickerwhiteinput${n}]`);
+      filters.push(`[flickerwhiteinput${n}]lutrgb=r=255:g=255:b=255[flickerwhite${n}]`);
       filters.push(`[flickerbloom${n}]gblur=sigma=${2 + glow * 10}[flickerglow${n}]`);
-      filters.push(`[flickerbase${n}][flickerglow${n}]blend=all_expr='${expression}':enable='${enable}'[${output}]`);
+      filters.push(`[flickerbase${n}][flickerwhite${n}]blend@flickerflash${n}=all_mode=screen:all_opacity=${initial}:enable='${enable}'[flickerlift${n}]`);
+      filters.push(`[flickerlift${n}][flickerglow${n}]blend@flickerbloom${n}=all_mode=screen:all_opacity=${initial * glow}:enable='${enable}'[${output}]`);
     } else throw new Error("Unsupported video effect.");
     current = output;
   }

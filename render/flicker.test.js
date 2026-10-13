@@ -22,7 +22,9 @@ test("flicker native filters animate subtly, return to baseline and reject unsaf
     const start=await pixel(0), peak=await pixel(.5), reset=await pixel(1);
     assert.ok(peak>start+3 && peak<start+20,{start,peak,reset});
     assert.ok(Math.abs(reset-start)<3,{start,peak,reset});
-    assert.ok((await build([effect],.5)).filters.join(";").includes("T+0.5"));
+    const preview = (await build([effect],.5)).filters.join(";");
+    assert.ok(preview.includes("all_opacity=0.05"));
+    assert.ok(!preview.includes("sendcmd") && !result.filters.join(";").includes("all_expr"));
     for(const patch of [{speedHz:3},{amount:.5},{glow:2},{amount:NaN}]) await assert.rejects(build([{...effect,...patch}]),/Invalid subtle flicker/);
   } finally {await fs.rm(dir,{recursive:true,force:true});}
 });
