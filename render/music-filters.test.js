@@ -18,8 +18,8 @@ test("looks are bounded, no-op by default, and only filter the main source branc
   for (const bad of [{ preset: "unknown" }, { strength: NaN }, { brightness: .3 }, { sharpness: -1 }, { script: true }])
     assert.throws(() => videoFilterSettings(bad));
   const filter = layoutFilter("blurfit", 1080, 1920, 320, 180, {}, { preset: "mono" });
-  assert.match(filter, /\[vb\]eq=.*saturation=0/);
-  assert.doesNotMatch(filter.split(";").find(s => s.startsWith("[va]")), /saturation=0/);
+  assert.match(filter, /\[vb\]format=gbrp,lutrgb=.*colorchannelmixer=/);
+  assert.doesNotMatch(filter.split(";").find(s => s.startsWith("[va]")), /lutrgb|colorchannelmixer/);
   assert.throws(() => resolveStyle("boxed_red", { musicStartSeconds: Infinity }));
   for (const preset of Object.keys(VIDEO_FILTER_PRESETS)) {
     execFileSync("ffmpeg", ["-v", "error", "-threads", "1", "-filter_complex_threads", "1",
