@@ -28,6 +28,13 @@ test("authenticated worker advertises and executes source edits through its real
     const catalog = await (await fetch(root + "/api/styles", { headers })).json();
     assert.equal(catalog.capabilities.sourceEdit, 1); assert.equal(catalog.capabilities.thumbnails, 1);
     assert.equal(catalog.capabilities.headlineCoverStyle, 1); assert.equal(catalog.capabilities.faceTracking, 0);
+    assert.equal((await fetch(root + "/api/analyze/faces", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clipFilename: "fixture.mp4", benchmark: true }),
+    })).status, 401);
+    assert.equal((await fetch(root + "/api/analyze/faces", {
+      method: "POST", headers, body: JSON.stringify({ clipFilename: "fixture.mp4", benchmark: true }),
+    })).status, 503); // No model provisioned in this isolated checkout.
     await run("ffmpeg", ["-y", "-v", "error", "-threads", "1", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30:duration=2",
       "-f", "lavfi", "-i", "sine=frequency=800:duration=2", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", path.join(dir, "test.mp4")]);
     const body = { jobId: "source_http_test", clipFilename: "test.mp4", headline: "TEST", highlightWords: [], words: [{ word: "TEST", start: 0, end: .4 }],

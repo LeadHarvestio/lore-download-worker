@@ -30,9 +30,13 @@ app.use(express.json({ limit: "2mb" }));
 var API_KEY = process.env.API_KEY || "";
 var DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || "/tmp/downloads";
 var faceAnalysis = createFaceAnalysisQueue(DOWNLOAD_DIR, () => activeProcesses > 0, () => startQueuedProcessJobs());
-const faceTrackingReady = () => process.env.ENABLE_FACE_TRACKING === "1" && Boolean(API_KEY) && fs.existsSync(process.env.FACE_MODEL_PATH || "/app/render/yunet.onnx");
+const faceTrackingInstalled = () => Boolean(API_KEY) && fs.existsSync(process.env.FACE_MODEL_PATH || "/app/render/yunet.onnx");
+const faceTrackingReady = () => process.env.ENABLE_FACE_TRACKING === "1" && faceTrackingInstalled();
 app.post("/api/analyze/faces", auth, (req, res) => {
-  if (!faceTrackingReady()) return res.status(503).json({ error: "Face tracking is awaiting performance validation and activation." });
+  // An explicit authenticated benchmark can validate the deployed CPU/model
+  // without advertising tracking support or enabling it for every client.
+  const benchmark = req.body?.benchmark === true;
+  if (!(benchmark ? faceTrackingInstalled() : faceTrackingReady())) return res.status(503).json({ error: "Face tracking is awaiting performance validation and activation." });
   try { res.status(202).json(faceAnalysis.enqueue(req.body.clipFilename, req.body.force === true)); }
   catch (error) { res.status(400).json({ error: error.message }); }
 });
