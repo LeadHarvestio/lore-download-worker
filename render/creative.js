@@ -174,6 +174,18 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
     if (effect.type === "flash") {
       if (!HEX.test(effect.color) || !(effect.opacity >= 0 && effect.opacity <= 1)) throw new Error("Invalid flash color or strength.");
       filters.push(`[${current}]drawbox=x=0:y=0:w=iw:h=ih:color=${effect.color.replace("#", "0x")}@${effect.opacity}:t=fill:enable='${enable}'[${output}]`);
+    } else if (effect.type === "flicker") {
+      const speed = effect.speedHz ?? .8, amount = effect.amount ?? .025, glow = effect.glow ?? .2;
+      if (!Number.isFinite(speed) || speed < .1 || speed > 2 ||
+          !Number.isFinite(amount) || amount < 0 || amount > .08 ||
+          !Number.isFinite(glow) || glow < 0 || glow > 1) throw new Error("Invalid subtle flicker controls.");
+      // Source layers only: text/caption composition happens after this stage.
+      const pulse = `${amount}*(0.5-0.5*cos(2*PI*${speed}*(T+${offset}-${effect.startSeconds})))`;
+      const light = `A+(255-A)*(${pulse})`;
+      const expression = `${light}+(255-(${light}))*B/255*(${pulse})*${glow}`;
+      filters.push(`[${current}]format=gbrp,split=2[flickerbase${n}][flickerbloom${n}]`);
+      filters.push(`[flickerbloom${n}]gblur=sigma=${2 + glow * 10}[flickerglow${n}]`);
+      filters.push(`[flickerbase${n}][flickerglow${n}]blend=all_expr='${expression}':enable='${enable}'[${output}]`);
     } else throw new Error("Unsupported video effect.");
     current = output;
   }
