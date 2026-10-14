@@ -21,11 +21,11 @@ export function sourceSettings(source = {}) {
 }
 
 const even = value => Math.max(2, Math.round(value / 2) * 2);
-export function foregroundGeometry(sourceWidth, sourceHeight, width, height, source = {}) {
+export function foregroundGeometry(sourceWidth, sourceHeight, width, height, source = {}, layout = "blurfit") {
   const settings = sourceSettings(source);
   const croppedWidth = Math.max(2, Math.floor(sourceWidth * (1 - (settings.cropLeftPct + settings.cropRightPct) / 100) / 2) * 2);
   const croppedHeight = Math.max(2, Math.floor(sourceHeight * (1 - (settings.cropTopPct + settings.cropBottomPct) / 100) / 2) * 2);
-  const scale = Math.min(width / croppedWidth, height / croppedHeight) * settings.zoom;
+  const scale = (layout === "fill" ? Math.max(width / croppedWidth, height / croppedHeight) : Math.min(width / croppedWidth, height / croppedHeight)) * settings.zoom;
   return { croppedWidth, croppedHeight, width: even(croppedWidth * scale), height: even(croppedHeight * scale) };
 }
 
@@ -34,6 +34,12 @@ export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, s
   if (settings.tracking?.enabled) return trackedLayoutFilter(layout, width, height, sourceWidth, sourceHeight, settings, videoFilter, previewAt);
   const look = sourceVideoFilter(videoFilter);
   if (layout === "fill") {
+    if (settings.zoom !== 1 || settings.cropLeftPct || settings.cropRightPct || settings.cropTopPct || settings.cropBottomPct) {
+      const geometry = foregroundGeometry(sourceWidth, sourceHeight, width, height, settings, "fill");
+      const x = Math.floor(sourceWidth * settings.cropLeftPct / 100 / 2) * 2;
+      const y = Math.floor(sourceHeight * settings.cropTopPct / 100 / 2) * 2;
+      return `color=c=black:s=${width}x${height}:r=30[canvas];[0:v]fps=30,crop=${geometry.croppedWidth}:${geometry.croppedHeight}:${x}:${y},${look}scale=${geometry.width}:${geometry.height},setsar=1[fg];[canvas][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2:shortest=1[base]`;
+    }
     if (settings.xPct === 50 && settings.yPct === 50) return `[0:v]fps=30,${look}scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[base]`;
     return `color=c=black:s=${width}x${height}:r=30[canvas];[0:v]fps=30,${look}scale=${width}:${height}:force_original_aspect_ratio=increase,setsar=1[fg];[canvas][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2:shortest=1[base]`;
   }

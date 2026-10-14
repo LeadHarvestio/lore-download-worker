@@ -22,12 +22,12 @@ test("source editing defaults and bounds are explicit", () => {
   assert.equal(g.height % 2, 0);
 });
 
-test("zoom leaves the background filter intact and fill ignores blurfit-only crop/zoom", () => {
+test("zoom preserves blur backgrounds and fill now supports source crop/zoom", () => {
   const a = layoutFilter("blurfit", 1080, 1920, 320, 180);
   const b = layoutFilter("blurfit", 1080, 1920, 320, 180, { zoom: 2 });
   assert.equal(a.split(";")[1], b.split(";")[1]);
   assert.notEqual(a.split(";")[2], b.split(";")[2]);
-  assert.equal(layoutFilter("fill", 1080, 1920, 320, 180),
+  assert.notEqual(layoutFilter("fill", 1080, 1920, 320, 180),
     layoutFilter("fill", 1080, 1920, 320, 180, { cropLeftPct: 40, zoom: 3 }));
 });
 
@@ -81,8 +81,8 @@ test("original-audio toggle silences voice, can be reversed, and preserves music
         highlightWords: [], musicFilePath, styleOverrides: { source: { muteAudio, ...(musicFilePath ? { cropLeftPct: 10, cropBottomPct: 10, zoom: 1.25 } : {}) }, layout: musicFilePath ? "blurfit" : "fill" },
         words: [{ word: "caption", start: 0.05, end: 0.3 }] });
       assert.equal(result.words[0].word, "caption", "Caption transcription survives original-audio muting");
-      assert.equal(result.outputWidth, 2160);
-      assert.equal(result.outputHeight, 3840);
+      assert.equal(result.outputWidth, 1080);
+      assert.equal(result.outputHeight, 1920);
       const data = execFileSync("ffmpeg", ["-v", "error", "-i", output, "-map", "0:a:0", "-f", "f32le", "-ac", "1", "-ar", "44100", "-"]);
       const samples = new Float32Array(data.buffer, data.byteOffset, data.byteLength / 4);
       return Math.sqrt(samples.reduce((sum, v) => sum + v * v, 0) / samples.length);
