@@ -14,9 +14,16 @@ const pending = new Map();
 const active = (start, end, offset) => `between(t+${offset},${start},${end})`;
 export function validateAssetUrl(value, assetId) {
   const url = new URL(value);
+  const entries = [...url.searchParams];
+  const signedMediaQuery = entries.length === 2 &&
+    entries.filter(([name]) => name === "mediaExpires").length === 1 &&
+    entries.filter(([name]) => name === "mediaSignature").length === 1 &&
+    /^\d{10}$/.test(url.searchParams.get("mediaExpires") || "") &&
+    /^[a-f0-9]{64}$/.test(url.searchParams.get("mediaSignature") || "");
   if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443") ||
       !/\.(replit\.app|replit\.dev)$/.test(url.hostname) ||
-      url.pathname !== `/api/editing-assets/${assetId}/file` || url.search) throw new Error("Invalid context asset URL.");
+      url.pathname !== `/api/editing-assets/${assetId}/file` || url.hash ||
+      (url.search && !signedMediaQuery)) throw new Error("Invalid context asset URL.");
   return url;
 }
 const privateIP = ip => /^(0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|224\.|255\.|::|f[cd]|fe80)/i.test(ip) ||
