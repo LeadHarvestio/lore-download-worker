@@ -9,6 +9,8 @@ import { validateSourceEdit, encodeSourceEdit } from "./source-edit.js";
 import { muteVolumeFilter } from "./censorship.js";
 import { headlinePosition, previewWords } from "./placement.js";
 import { layoutFilter, sourceSettings } from "./framing.js";
+import { segmentFramingFilter } from "./segment-framing.js";
+import { prepareStackedCreative } from "./stacked-creative.js";
 import { createRenderCache, fileFingerprint, contentFingerprint } from "./cache.js";
 import { prepareCreativeInputs } from "./creative.js";
 import { prepareSoundEffects } from "./sound-effects.js";
@@ -65,7 +67,8 @@ export async function processClip(p) {
   let info = await probe(p.inputPath);
   if (p.sourceEdit !== undefined) {
     const sourceEdit = validateSourceEdit(p.sourceEdit, info.duration);
-    const edited = await cache.acquire("source-edit-v1", { original: await fileFingerprint(p.inputPath), sourceEdit }, "mp4",
+    const timingOnly = { segments: sourceEdit.segments.map(({ srcStart, srcEnd, speed }) => ({ srcStart, srcEnd, speed })) };
+    const edited = await cache.acquire("source-edit-v1", { original: await fileFingerprint(p.inputPath), sourceEdit: timingOnly }, "mp4",
       dest => encodeSourceEdit(p.inputPath, dest, sourceEdit, info.hasAudio, deadline));
     leases.push(edited);
     p = { ...p, inputPath: edited.file };
@@ -121,10 +124,12 @@ export async function processClip(p) {
   let backgroundPath = p.inputPath;
   if (!preview) {
     const { muteAudio, ...geometry } = source;
-    const background = await cache.acquire("background-1080p-v1", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter }, "mp4", async dest => {
+    const background = await cache.acquire("background-1080p-segments-v2", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter, segmentPlacement: p.sourceEdit }, "mp4", async dest => {
+      const framingScript = path.join(p.workDir, "source-framing.txt");
+      fs.writeFileSync(framingScript, segmentFramingFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.sourceEdit));
       await run(process.env.FFMPEG_BIN || "ffmpeg", [
         "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1", "-i", p.inputPath,
-        "-filter_complex", layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter),
+        "-filter_complex_script", framingScript,
         "-map", "[base]", "-an", "-t", dur.toFixed(2), "-c:v", "libx264", "-threads", "2", "-preset", "veryfast",
         "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", dest,
       ], { timeout: 10 * 60 * 1000, signal: deadline, maxBuffer: 20 * 1024 * 1024 });
@@ -141,12 +146,13 @@ export async function processClip(p) {
   if (musicWav) { args.push("-stream_loop", "-1", "-i", musicWav); musicIdx = nextIdx++; }
   if (voiceWav) { args.push("-i", voiceWav); voiceIdx = nextIdx++; }
 
-  const creative = await prepareCreativeInputs({ style, args, nextIndex: nextIdx, width, height, duration: info.duration,
+  const creative = await prepareStackedCreative({ style, args, nextIndex: nextIdx, width, height, duration: info.duration,
+    sourceWidth: info.width, sourceHeight: info.height, source, sourceEdit: p.sourceEdit, workDir: p.workDir,
     previewAt: preview ? p.previewAt : undefined, originalPath: p.inputPath, originalIndex: preview ? 0 : undefined });
   const sounds = await prepareSoundEffects({ effects: style.soundEffects, args, nextIndex: creative.nextIndex,
     duration: info.duration, preview });
   const f = [
-    preview ? layoutFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.previewAt) : "[0:v]setsar=1[base]",
+    preview ? segmentFramingFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.sourceEdit, p.previewAt) : "[0:v]setsar=1[base]",
     ...creative.filters,
     `[1:v]format=rgba[hl]`,
     `[${creative.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
@@ -184,7 +190,9 @@ export async function processClip(p) {
     f.push(`${inputs.map(label => `[${label}]`).join("")}amix=inputs=${inputs.length}:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0,${STEREO}[withcontextaudio]`);
     mapAudio = ["-map", "[withcontextaudio]"];
   }
-  args.push("-filter_complex", f.join(";"), "-map", "[outv]", ...mapAudio);
+  const compositionScript = path.join(p.workDir, "composition-filters.txt");
+  fs.writeFileSync(compositionScript, f.join(";"));
+  args.push("-filter_complex_script", compositionScript, "-map", "[outv]", ...mapAudio);
   if (preview) {
     args.push("-frames:v", "1", "-threads", "1", p.outputPath);
   } else {

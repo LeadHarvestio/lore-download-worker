@@ -81,7 +81,7 @@ export async function edgedCutout(file, width, glow, cacheDir = ROOT) {
 }
 
 export { downloadAsset };
-export async function prepareCreativeInputs({ style, args, nextIndex, width, height, duration, previewAt, originalPath, originalIndex }, resolver = downloadAsset) {
+export async function prepareCreativeInputs({ style, args, nextIndex, width, height, duration, previewAt, originalPath, originalIndex, initialLabel = "base" }, resolver = downloadAsset) {
   const offset = previewAt ?? 0;
   const rawLayers = style.layers || [], effects = style.effects || [];
   if (!Array.isArray(rawLayers) || rawLayers.length > 13 || !Array.isArray(effects) || effects.length > 30) throw new Error("Invalid creative layer count.");
@@ -97,6 +97,7 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
   }
   const entries = [];
   for (const layer of layers) {
+    if (layer.placement !== undefined && !["over-video", "under-video"].includes(layer.placement)) throw new Error("Invalid layer placement.");
     if (!["cutout", "video", "image"].includes(layer.kind) || !UUID.test(layer.assetId) ||
         !Number.isFinite(layer.startSeconds) || !Number.isFinite(layer.endSeconds) || layer.endSeconds <= layer.startSeconds) throw new Error("Invalid timed context layer.");
     if (previewAt !== undefined && (previewAt < layer.startSeconds || previewAt >= layer.endSeconds)) continue;
@@ -110,7 +111,7 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
     }
     entries.push({ layer, index: index++, edged: layer.kind === "cutout" && layer.glow?.enabled, targetWidth });
   }
-  const filters = [], audioFilters = [], audioLabels = []; let current = "base";
+  const filters = [], audioFilters = [], audioLabels = []; let current = initialLabel;
   for (const [n, entry] of entries.entries()) {
     const { layer: l, index: input } = entry;
     const label = `context${n}`, output = `contextbase${n}`, start = previewAt === undefined ? l.startSeconds : 0;

@@ -88,10 +88,10 @@ function measureWord(ctx, text, size, family) {
   const primary = `${size}px "${family}", "Anton", sans-serif`;
   ctx.font = primary;
   const cap = ctx.measureText("H").actualBoundingBoxAscent;
-  const parts = family === "Block Stamp" ? text.match(/[A-Za-z]+|[^A-Za-z]+/g) || [] : [text];
+  const parts = family === "Block Stamp" ? text.match(/[A-Za-z0-9]+|[^A-Za-z0-9]+/g) || [] : [text];
   const runs = parts.map(part => {
     let font = primary;
-    if (family === "Block Stamp" && /[^A-Za-z]/.test(part)) {
+    if (family === "Block Stamp" && /[^A-Za-z0-9]/.test(part)) {
       ctx.font = `${size}px "Anton", sans-serif`;
       const fallbackCap = ctx.measureText("H").actualBoundingBoxAscent;
       const glyph = ctx.measureText(part).actualBoundingBoxAscent;
