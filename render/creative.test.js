@@ -23,6 +23,32 @@ test("context fetch only permits public app asset routes", () => {
   ]) assert.throws(() => validateAssetUrl(url, uuid));
 });
 
+test("signed private media links retain strict asset URL validation", () => {
+  const base = `https://example.replit.app/api/editing-assets/${uuid}/file`;
+  const signature = "a".repeat(64);
+  const signed = `${base}?mediaExpires=1792094400&mediaSignature=${signature}`;
+  assert.equal(validateAssetUrl(signed, uuid).href, signed);
+  assert.equal(validateAssetUrl(`${base}?mediaSignature=${signature}&mediaExpires=1792094400`, uuid).searchParams.get("mediaSignature"), signature);
+  assert.equal(validateAssetUrl(signed.replace("replit.app", "replit.dev"), uuid).protocol, "https:");
+  for (const value of [
+    `${base}?mediaExpires=1792094400`,
+    `${base}?mediaSignature=${signature}`,
+    `${base}?mediaExpires=bad&mediaSignature=${signature}`,
+    `${base}?mediaExpires=1792094400&mediaSignature=short`,
+    `${signed}&mediaSignature=${signature}`,
+    `${signed}&mediaExpires=1792094400`,
+    `${signed}&redirect=https://evil.example`,
+    `${signed}#fragment`,
+    signed.replace("/file?", "/other?"),
+    signed.replace(uuid, "00000000-0000-0000-0000-000000000000"),
+    signed.replace("https://", "http://"),
+    signed.replace("example.replit.app", "127.0.0.1"),
+    signed.replace("example.replit.app", "example.replit.app.attacker.example"),
+    signed.replace("example.replit.app", "user:pass@example.replit.app"),
+    signed.replace("example.replit.app", "example.replit.app:8000"),
+  ]) assert.throws(() => validateAssetUrl(value, uuid), value);
+});
+
 test("Integral is default; reference preserves masking, colors and progressive words", () => {
   assert.equal(PRESETS.boxed_red.caption.font, "Integral CF Extra Bold");
   assert.equal(Object.keys(FONTS).filter(f => f.startsWith("Integral")).length, 6);
