@@ -10,6 +10,7 @@ import { processClip, resolveStyle, OUT_W, OUT_H } from "./render/process.js";
 import { censorWords, expletiveRanges } from "./render/censorship.js";
 import { sourceSettings } from "./render/framing.js";
 import { validateSourceEdit } from "./render/source-edit.js";
+import { voiceDuckingSchema } from "./render/voice-ducking.js";
 
 const execFileAsync = promisify(execFile);
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -223,6 +224,13 @@ export function validateStyleInput(presetId, overrides) {
     throw new Error("styleOverrides must be an object.");
   }
   if (overrides?.source !== undefined) sourceSettings(overrides.source);
+  if (overrides?.soundEffects !== undefined) {
+    if (!Array.isArray(overrides.soundEffects) || overrides.soundEffects.length > 30) throw new Error("Invalid sound effect count.");
+    for (const sound of overrides.soundEffects) {
+      if (!sound || typeof sound !== "object") throw new Error("Invalid sound effect.");
+      if (sound.voiceDucking !== undefined) voiceDuckingSchema.parse(sound.voiceDucking);
+    }
+  }
 }
 
 export function toRenderWords(words) {
@@ -267,6 +275,8 @@ export async function processVideo({
     throw new Error("Music volume must be between -30 dB and -5 dB.");
   }
   validateStyleInput(stylePresetId, styleOverrides);
+  if (styleOverrides.soundEffects?.some(effect => effect.voiceDucking !== undefined) && !Array.isArray(providedWords))
+    throw new Error("Speech ducking requires saved output-time words; no automatic transcription.");
   if (typeof censorCaptions !== "boolean" || typeof muteExpletives !== "boolean") throw new Error("Censorship settings must be booleans.");
   if (!fs.existsSync(clipPath) || !fs.statSync(clipPath).isFile()) {
     throw new Error("The downloaded clip is missing from the worker.");
@@ -308,6 +318,7 @@ export async function processVideo({
         workDir,
         headline: { text: normalizedHeadline, highlight: highlights },
         words: toRenderWords(captionWords),
+        speechWords: toRenderWords(words),
         muteRanges,
         style,
         musicPath,

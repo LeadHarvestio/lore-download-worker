@@ -16,7 +16,7 @@ test("sound inputs are independently trimmed, gained, delayed and padded", async
   const args = [];
   const result = await prepareSoundEffects({ effects: [effect], args, nextIndex: 3, duration: 2 }, async e => {
     assert.equal(e.kind, "audio"); return "/tmp/boom.mp3";
-  });
+  }, async () => 1);
   assert.deepEqual(args, ["-i", "/tmp/boom.mp3"]);
   assert.equal(result.nextIndex, 4);
   assert.match(result.filters[0], /\[3:a\].*atrim=start=0.2:duration=0.4.*volume=-6dB.*adelay=500:all=1.*atrim=duration=2/);
