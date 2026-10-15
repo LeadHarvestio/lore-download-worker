@@ -33,7 +33,7 @@ export function prepareNameTags({ style, args, nextIndex, width, height, sw, sh,
       const end = Math.min(Math.ceil(duration * 30) - 1, Math.ceil(tag.endSeconds * 30));
       for (let n = start; n <= end; n++) {
         const p = positionAt(n / 30);
-        commands.push(`${(n / 30).toFixed(6)} overlay@nametag${i} x ${p.x}, overlay@nametag${i} y ${p.y};`);
+        commands.push(`${(Math.floor(n/30*1e6)/1e6).toFixed(6)} overlay@nametag${i} x ${p.x}, overlay@nametag${i} y ${p.y};`);
       }
     }
     const commandFile = path.join(workDir, `name-tag-${i}-commands.txt`);

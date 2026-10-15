@@ -7,7 +7,7 @@ export function validateSourceEdit(value, duration = 1800) {
       !Array.isArray(value.segments) || value.segments.length < 1 || value.segments.length > 40) fail("sourceEdit needs 1–40 segments.");
   let previousEnd = 0, outputDuration = 0;
   const segments = value.segments.map(segment => {
-    if (!segment || typeof segment !== "object" || Array.isArray(segment) || Object.keys(segment).some(key => !["srcStart", "srcEnd", "speed", "transform"].includes(key))) fail("Unknown source segment field.");
+    if (!segment || typeof segment !== "object" || Array.isArray(segment) || Object.keys(segment).some(key => !["srcStart", "srcEnd", "speed", "transform", "punchScale"].includes(key))) fail("Unknown source segment field.");
     const { srcStart, srcEnd, speed = 1 } = segment;
     if (![srcStart, srcEnd, speed].every(Number.isFinite) || srcStart < 0 || srcEnd <= srcStart || srcStart < previousEnd || srcEnd > duration + .001 || speed < .25 || speed > 4) fail("Segments must be ordered, non-overlapping, inside the source and speed 0.25–4.");
     previousEnd = srcEnd; outputDuration += (srcEnd - srcStart) / speed;
@@ -15,7 +15,9 @@ export function validateSourceEdit(value, duration = 1800) {
     if (transform !== undefined && (!transform || typeof transform !== "object" || Array.isArray(transform) ||
       Object.keys(transform).some(key => !["xPct", "yPct", "zoom", "cropLeftPct", "cropRightPct", "cropTopPct", "cropBottomPct"].includes(key)) ||
       Object.entries(transform).some(([key, value]) => !Number.isFinite(value) || value < (key === "zoom" ? 1 : 0) || value > (key === "zoom" ? 3 : key.startsWith("crop") ? 40 : 100)))) fail("Invalid segment placement.");
-    return { srcStart, srcEnd, speed, ...(transform ? { transform: { ...transform } } : {}) };
+    if (segment.punchScale !== undefined && (!Number.isFinite(segment.punchScale) || segment.punchScale < 1 || segment.punchScale > 1.15)) fail("Invalid segment punch-in scale.");
+    return { srcStart, srcEnd, speed, ...(transform ? { transform: { ...transform } } : {}),
+      ...(segment.punchScale !== undefined ? { punchScale: segment.punchScale } : {}) };
   });
   if (outputDuration < 1 || outputDuration > 1800) fail("Edited output must be 1 second–30 minutes.");
   return { segments };

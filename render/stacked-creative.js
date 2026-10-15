@@ -53,7 +53,7 @@ export async function prepareStackedCreative(options, resolver) {
     sw: options.sourceWidth, sh: options.sourceHeight, source: options.source, edit: options.sourceEdit,
     preparedSource: sourceSettings(options.source),
     cameraPoints: options.source?.tracking?.enabled ? smoothFaceTrack(options.source.tracking, Math.max(options.source.tracking.endSeconds, ...options.source.tracking.track.map(point => point.t), .1)) : undefined };
-  const rectsAt = at => options.style.sourcePanes
+  const rectsAt = at => options.style.sourcePanes || options.style.effects?.some(e => e.type === "zoom") || options.sourceEdit?.segments.some(s => s.punchScale !== undefined)
     ? sourcePlaneRects(options.style, options.sourceWidth, options.sourceHeight, options.width, options.height, options.sourceEdit, at)
       .map(rect => rect.w && rect.h ? rect : { x: -10000, y: -10000, w: 1, h: 1 })
     : [foregroundRect(geometry, at)];
@@ -62,7 +62,7 @@ export async function prepareStackedCreative(options, resolver) {
   if (options.previewAt === undefined) {
     for (let frame = 1; frame < Math.ceil(options.duration * 30); frame++) {
       const at = frame / 30;
-      rectsAt(at).forEach((rect, i) => commands.push(`${at.toFixed(6)} drawbox@sourceplane${i} x ${rect.x}, drawbox@sourceplane${i} y ${rect.y}, drawbox@sourceplane${i} w ${rect.w}, drawbox@sourceplane${i} h ${rect.h};`));
+      rectsAt(at).forEach((rect, i) => commands.push(`${(Math.floor(at*1e6)/1e6).toFixed(6)} drawbox@sourceplane${i} x ${rect.x}, drawbox@sourceplane${i} y ${rect.y}, drawbox@sourceplane${i} w ${rect.w}, drawbox@sourceplane${i} h ${rect.h};`));
     }
   }
   const commandFile = path.join(options.workDir, "source-plane-commands.txt");
