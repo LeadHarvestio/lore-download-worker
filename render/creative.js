@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { lookup } from "node:dns/promises";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { sourceVideoFilter } from "./video-filters.js";
+import { flashOpacity } from "./director-motion.js";
 
 const ROOT = path.resolve("uploads", "context-assets");
 const UUID = /^[a-f0-9-]{36}$/;
@@ -176,12 +177,30 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
     current = "shakesbase";
   }
   for (const [n, effect] of effects.entries()) {
-    if (effect.type === "shake") continue;
+    if (effect.type === "shake" || effect.type === "zoom") continue;
     if (!Number.isFinite(effect.startSeconds) || !Number.isFinite(effect.endSeconds) || effect.endSeconds <= effect.startSeconds) throw new Error("Invalid effect interval.");
     const output = `effect${n}`, enable = active(effect.startSeconds, effect.endSeconds, offset);
     if (effect.type === "flash") {
       if (!HEX.test(effect.color) || !(effect.opacity >= 0 && effect.opacity <= 1)) throw new Error("Invalid flash color or strength.");
-      filters.push(`[${current}]drawbox=x=0:y=0:w=iw:h=ih:color=${effect.color.replace("#", "0x")}@${effect.opacity}:t=fill:enable='${enable}'[${output}]`);
+      if (effect.blend === undefined && effect.envelope === undefined) {
+        filters.push(`[${current}]drawbox=x=0:y=0:w=iw:h=ih:color=${effect.color.replace("#", "0x")}@${effect.opacity}:t=fill:enable='${enable}'[${output}]`);
+      } else {
+        const commands = [];
+        // FFmpeg normal mode weights A (base), whereas other blend modes
+        // use opacity as the amount of the blended result.
+        const blendOpacity = t => (effect.blend ?? "normal") === "normal" ? 1-flashOpacity(effect,t) : flashOpacity(effect,t);
+        if (previewAt === undefined) for (let frame = Math.max(0, Math.ceil(effect.startSeconds*30));
+          frame <= Math.ceil(Math.min(duration,effect.endSeconds)*30); frame++) {
+          const t = frame/30;
+          commands.push(`${t.toFixed(6)} blend@directorflash${n} all_opacity ${blendOpacity(t).toFixed(8)}`);
+        }
+        const clock = commands.length ? `sendcmd=c='${commands.join(";")}',` : "";
+        const rgb = [1,3,5].map(i=>parseInt(effect.color.slice(i,i+2),16));
+        filters.push(`[${current}]${clock}format=gbrp,split=2[flashbase${n}][flashcolorin${n}]`);
+        filters.push(`[flashcolorin${n}]lutrgb=r=${rgb[0]}:g=${rgb[1]}:b=${rgb[2]}[flashcolor${n}]`);
+        const mode = (effect.blend ?? "normal") === "normal" ? "normal" : effect.blend;
+        filters.push(`[flashbase${n}][flashcolor${n}]blend@directorflash${n}=all_mode=${mode}:all_opacity=${blendOpacity(offset)}:enable='${enable}'[${output}]`);
+      }
     } else if (effect.type === "flicker") {
       const speed = effect.speedHz ?? .8, amount = effect.amount ?? .025, glow = effect.glow ?? .2;
       if (!Number.isFinite(speed) || speed < .1 || speed > 2 ||

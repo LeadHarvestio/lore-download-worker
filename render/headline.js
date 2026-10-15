@@ -109,6 +109,11 @@ function measureWord(ctx, text, size, family) {
 }
 
 export function renderHeadlinePng({ text, highlight, width, height, style }) {
+  if (style.enabled === false) {
+    const canvas = createCanvas(1, 1);
+    return { buffer: canvas.toBuffer("image/png"), width: 1, height: 1, lines: 0, fontSize: 0,
+      visibleBox: { x: 0, y: 0, width: 0, height: 0 }, lineAdvance: 0, inkHeight: 0 };
+  }
   loadFonts();
   if (style.coverBox) return renderHeadlineCoverFit({ text, highlight, width, height, style }, { createCanvas, FONTS, tokenize, measureWord, hexA });
   const S = style;

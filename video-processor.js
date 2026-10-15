@@ -1,3 +1,4 @@
+import { validateDirectorStyle } from "./render/director-motion.js";
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -223,6 +224,7 @@ export function validateStyleInput(presetId, overrides) {
     throw new Error("styleOverrides must be an object.");
   }
   if (overrides?.source !== undefined) sourceSettings(overrides.source);
+  validateDirectorStyle(overrides || {});
 }
 
 export function toRenderWords(words) {

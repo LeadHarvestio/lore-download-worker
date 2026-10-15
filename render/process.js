@@ -10,10 +10,12 @@ import { muteVolumeFilter } from "./censorship.js";
 import { headlinePosition, previewWords } from "./placement.js";
 import { layoutFilter, sourceSettings } from "./framing.js";
 import { segmentFramingFilter } from "./segment-framing.js";
+import { directorFramingFilter } from "./director-framing.js";
 import { prepareStackedCreative } from "./stacked-creative.js";
 import { createRenderCache, fileFingerprint, contentFingerprint } from "./cache.js";
 import { prepareCreativeInputs } from "./creative.js";
 import { prepareSoundEffects } from "./sound-effects.js";
+import { prepareNameTags } from "./name-tags.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
@@ -124,9 +126,10 @@ export async function processClip(p) {
   let backgroundPath = p.inputPath;
   if (!preview) {
     const { muteAudio, ...geometry } = source;
-    const background = await cache.acquire("background-1080p-segments-v2", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter, segmentPlacement: p.sourceEdit }, "mp4", async dest => {
+    const background = await cache.acquire(style.sourcePanes || style.effects?.some(e=>e.type==="zoom") ? "background-director-v1" : "background-1080p-segments-v2", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter, segmentPlacement: p.sourceEdit,
+      ...(style.sourcePanes ? { sourcePanes: style.sourcePanes } : {}), ...(style.effects?.some(e=>e.type==="zoom") ? { zooms: style.effects.filter(e=>e.type==="zoom") } : {}) }, "mp4", async dest => {
       const framingScript = path.join(p.workDir, "source-framing.txt");
-      fs.writeFileSync(framingScript, segmentFramingFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.sourceEdit));
+      fs.writeFileSync(framingScript, directorFramingFilter(style, width, height, info.width, info.height, source, p.sourceEdit));
       await run(process.env.FFMPEG_BIN || "ffmpeg", [
         "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1", "-i", p.inputPath,
         "-filter_complex_script", framingScript,
@@ -151,11 +154,14 @@ export async function processClip(p) {
     previewAt: preview ? p.previewAt : undefined, originalPath: p.inputPath, originalIndex: preview ? 0 : undefined });
   const sounds = await prepareSoundEffects({ effects: style.soundEffects, args, nextIndex: creative.nextIndex,
     duration: info.duration, preview });
+  const tags = await prepareNameTags({ style:{...style,sourceEdit:p.sourceEdit},args,nextIndex:sounds.nextIndex,width,height,sw:info.width,sh:info.height,
+    duration:info.duration,at:preview?p.previewAt:undefined,workDir:p.workDir,input:creative.label });
   const f = [
-    preview ? segmentFramingFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.sourceEdit, p.previewAt) : "[0:v]setsar=1[base]",
+    preview ? directorFramingFilter(style, width, height, info.width, info.height, source, p.sourceEdit, p.previewAt) : "[0:v]setsar=1[base]",
     ...creative.filters,
+    ...tags.filters,
     `[1:v]format=rgba[hl]`,
-    `[${creative.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
+    `[${tags.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
     `[withhl]ass='${esc(assPath)}':fontsdir='${esc(FONT_DIR)}',format=yuv420p[outv]`,
   ];
 
