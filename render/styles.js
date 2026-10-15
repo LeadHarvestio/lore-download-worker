@@ -19,6 +19,7 @@ export const FONTS = {
 };
 
 const baseHeadline = {
+  enabled: true,
   font: "Block Stamp",
   sizePct: 8.2,          // font size as % of frame width
   uppercase: true,
