@@ -5,7 +5,7 @@ import path from "path";
 import { renderHeadlinePng, FONT_DIR } from "./headline.js";
 import { buildAss } from "./captions.js";
 import { resolveStyle } from "./styles.js";
-import { validateSourceEdit, encodeSourceEdit } from "./source-edit.js";
+import { validateSourceEdit, encodeSourceEdit, sourceEditDuration } from "./source-edit.js";
 import { muteVolumeFilter } from "./censorship.js";
 import { headlinePosition, previewWords } from "./placement.js";
 import { layoutFilter, sourceSettings } from "./framing.js";
@@ -70,11 +70,11 @@ export async function processClip(p) {
   if (p.sourceEdit !== undefined) {
     const sourceEdit = validateSourceEdit(p.sourceEdit, info.duration);
     const timingOnly = { segments: sourceEdit.segments.map(({ srcStart, srcEnd, speed }) => ({ srcStart, srcEnd, speed })) };
-    const edited = await cache.acquire("source-edit-v1", { original: await fileFingerprint(p.inputPath), sourceEdit: timingOnly }, "mp4",
+    const edited = await cache.acquire("source-edit-clock-v2", { original: await fileFingerprint(p.inputPath), sourceEdit: timingOnly }, "mp4",
       dest => encodeSourceEdit(p.inputPath, dest, sourceEdit, info.hasAudio, deadline));
     leases.push(edited);
     p = { ...p, inputPath: edited.file };
-    info = await probe(p.inputPath);
+    info = { ...await probe(p.inputPath), duration: sourceEditDuration(sourceEdit) };
   }
   const style = p.style;
   validateDirectorLayout(style);
