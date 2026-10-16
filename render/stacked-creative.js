@@ -8,8 +8,9 @@ import { sourcePlaneRects, directorLayoutFilter, renameGraph } from "./director-
 export function foregroundRect({ layout, width, height, sw, sh, source, edit, preparedSource, cameraPoints }, at) {
   let settings = preparedSource || sourceSettings(source), cursor = 0;
   for (const segment of edit?.segments || []) {
-    cursor += (segment.srcEnd - segment.srcStart) / (segment.speed ?? 1);
-    if (at < cursor) {
+    const start = edit.version === 2 ? segment.outputStart : cursor;
+    cursor = start + (segment.srcEnd - segment.srcStart) / (segment.speed ?? 1);
+    if (at >= start && at < cursor) {
       if (segment.transform) settings = { ...settings, ...segment.transform,
         ...(settings.tracking ? { tracking: { ...settings.tracking, enabled: false } } : {}) };
       break;

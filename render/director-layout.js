@@ -68,8 +68,8 @@ function paneFilter(layout, width, height, sw, sh, settings, look, at, origin = 
   const baseZoom = Math.max(settings.zoom ?? 1, tracking?.enabled ? tracking.zoom : 1);
   let punch = "1", cursor = 0;
   for (const segment of edit?.segments || []) {
-    const start = cursor;
-    cursor += (segment.srcEnd-segment.srcStart)/(segment.speed ?? 1);
+    const start = edit.version === 2 ? segment.outputStart : cursor;
+    cursor = start + (segment.srcEnd-segment.srcStart)/(segment.speed ?? 1);
     if (segment.punchScale !== undefined) punch = `if(gte(${time},${start})*lt(${time},${cursor}),${Math.min(3,baseZoom*segment.punchScale)/baseZoom},${punch})`;
   }
   const pw = `max(2,round(${fw}*(${punch})/2)*2)`, ph = `max(2,round(${fh}*(${punch})/2)*2)`;

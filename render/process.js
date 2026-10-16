@@ -70,8 +70,8 @@ export async function processClip(p) {
   let info = await probe(p.inputPath);
   if (p.sourceEdit !== undefined) {
     const sourceEdit = validateSourceEdit(p.sourceEdit, info.duration);
-    const timingOnly = { segments: sourceEdit.segments.map(({ srcStart, srcEnd, speed }) => ({ srcStart, srcEnd, speed })) };
-    const edited = await cache.acquire("source-edit-clock-v2", { original: await fileFingerprint(p.inputPath), sourceEdit: timingOnly }, "mp4",
+    const timingOnly = { ...(sourceEdit.version ? { version: sourceEdit.version } : {}), segments: sourceEdit.segments.map(({ srcStart, srcEnd, speed, instanceId, outputStart }) => ({ srcStart, srcEnd, speed, ...(sourceEdit.version === 2 ? { instanceId, outputStart } : {}) })) };
+    const edited = await cache.acquire("source-instances-clock-v3", { original: await fileFingerprint(p.inputPath), sourceEdit: timingOnly }, "mp4",
       dest => encodeSourceEdit(p.inputPath, dest, sourceEdit, info.hasAudio, deadline));
     leases.push(edited);
     p = { ...p, inputPath: edited.file };

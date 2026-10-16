@@ -4,8 +4,8 @@ export function segmentFramingFilter(layout, width, height, sw, sh, source, look
   if (!edit?.segments?.some(segment => segment.transform || !dynamicPunch && segment.punchScale !== undefined)) return frame(layout, width, height, sw, sh, source, look, previewAt);
   let cursor = 0;
   const spans = edit.segments.map(segment => {
-    const start = cursor;
-    cursor += (segment.srcEnd - segment.srcStart) / (segment.speed ?? 1);
+    const start = edit.version === 2 ? segment.outputStart : cursor;
+    cursor = start + (segment.srcEnd - segment.srcStart) / (segment.speed ?? 1);
     return { start, end: cursor, transform: segment.transform, punchScale: segment.punchScale };
   });
   const settings = span => {
@@ -15,7 +15,7 @@ export function segmentFramingFilter(layout, width, height, sw, sh, source, look
     return !dynamicPunch && span.punchScale !== undefined ? { ...s, zoom: Math.min(3,
       Math.max(s.zoom ?? 1, s.tracking?.enabled ? s.tracking.zoom : 1) * span.punchScale) } : s;
   };
-  if (previewAt !== undefined) return frame(layout, width, height, sw, sh, settings(spans.find(span => previewAt < span.end) || spans.at(-1)), look, previewAt);
+  if (previewAt !== undefined) return frame(layout, width, height, sw, sh, settings(spans.find(span => previewAt >= span.start && previewAt < span.end) || {}), look, previewAt);
   const manual = spans.filter(span => span.transform || !dynamicPunch && span.punchScale !== undefined);
   // Render the default camera path once. Only changed intervals get another
   // framing pass; splitting a tracked clip never duplicates its full expression.
