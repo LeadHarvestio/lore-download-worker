@@ -38,6 +38,40 @@ class IdentityTests(unittest.TestCase):
         self.assertNotEqual(first["faceId"], second["faceId"])
         self.assertNotEqual(second["faceId"], third["faceId"])
 
+    def test_other_person_cannot_take_hidden_id_even_with_matching_clothes(self):
+        tracker = IdentityTracker()
+        image = frame([(.2, (20, 190, 240))])
+        first = tracker.update(0, [point(0)], image, embeddings=[np.array([1., 0.])])[0]
+        for i in range(1, 16):
+            self.assertEqual(tracker.update(i / 10, [], image), [])
+        # Identical position/clothes and a retained body trajectory cannot
+        # override strong contradictory identity evidence after an occlusion.
+        other = tracker.update(1.6, [point(1.6)], image, embeddings=[np.array([0., 1.])])[0]
+        self.assertNotEqual(first["faceId"], other["faceId"])
+
+    def test_competing_appearances_do_not_widen_reacquisition_search(self):
+        tracker = IdentityTracker()
+        image = frame([(.05, (20, 190, 240)), (.3, (20, 190, 240))])
+        vectors = [np.array([.5, np.sqrt(.75), 0.]), np.array([.49, 0., np.sqrt(1 - .49 ** 2)])]
+        before = tracker.update(0, [point(0, .05), point(0, .3)], image, embeddings=vectors)
+        for i in range(1, 16):
+            tracker.update(i / 10, [], image)
+        after = tracker.update(1.6, [point(1.6, .8)], image, embeddings=[np.array([1., 0., 0.])])[0]
+        self.assertNotIn(after["faceId"], [p["faceId"] for p in before])
+
+    def test_camera_rotation_applies_the_full_affine_at_each_face(self):
+        tracker = IdentityTracker()
+        gray = np.random.default_rng(13).integers(0, 256, (240, 400), np.uint8)
+        image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        matrix = cv2.getRotationMatrix2D((200, 120), 4, 1.02)
+        moved = cv2.warpAffine(image, matrix, (400, 240))
+        tracker.camera_motion(image)
+        normalized, cut = tracker.camera_motion(moved)
+        self.assertFalse(cut)
+        center = np.array([.2, .3, 1.])
+        expected = matrix @ np.array([80., 72., 1.]) / [400, 240]
+        np.testing.assert_allclose(normalized @ center, expected, atol=.015)
+
     def test_same_location_different_appearance_does_not_steal_id(self):
         tracker = IdentityTracker()
         first = tracker.update(0, [point(0)], frame([(.2, (0, 255, 0))]), embeddings=[np.array([1., 0.])])[0]

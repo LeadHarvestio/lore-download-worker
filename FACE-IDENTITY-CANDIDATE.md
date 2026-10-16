@@ -1,4 +1,4 @@
-# Face-association fix — reported regressions verified
+# Face-association fix — reviewed occlusion acceptance cases pass
 
 This is an isolated worker experiment, not enabled speaker-follow and not a
 production face-tracker replacement. Draft worker PR:
@@ -6,29 +6,39 @@ production face-tracker replacement. Draft worker PR:
 No saved edit, production row, final render,
 transcription, merge, Railway configuration or deployment was changed.
 
-## Result: reported regression checks PASS; full speaker identity gate unverified
+## Result: short-gap and 1.5-second controlled-occlusion checks PASS
 
-The two reported failures are fixed in `local-motion-keyframe-v3`:
+The reported failures are fixed in `local-motion-keyframe-v4`:
 
 - Unreliable embeddings from tiny/blurred faces no longer override strong
   continuous visual tracking. Appearance anchors constrain reacquisition rather
   than every visible frame. Fresh observations are preferred over stale
   candidates; out-of-frame feature masks are clamped correctly.
 - Dense detector/landmark evidence stays at **10 fps**. Expensive appearance
-  inference uses **2 Hz keyframes**, rather than being repeated on every frame.
+  inference uses **2 Hz keyframes**, a bounded three-sample bootstrap and
+  explicit reacquisition, rather than being repeated on every frame.
   Lost tracks do not repeatedly run local optical flow on stale image regions.
 - The 55-second active and 60-second subprocess limits are unchanged.
+- Camera rotation/zoom applies the whole affine transform at each face instead
+  of treating the affine translation term as a uniform displacement.
+- Torso points are seeded only from observed faces and propagated through
+  brief head occlusions. Lost tracks never re-seed on guessed image regions.
+- A four-view in-memory appearance gallery supports returning profiles.
+  Positional uncertainty grows during loss only with discriminative identity
+  evidence and a margin over competing people. Weak recognition also requires
+  matching visual appearance; blur cannot veto a strong short-term optical
+  continuation. Contradictory identity evidence after a loss still rejects.
 
 Latest reproducible full-source benchmark (local CPU, one thread, sequential):
 
 | Source | Duration | Analysis | Child peak RSS | Dense evidence | Result |
 |---|---:|---:|---:|---|---|
-| car-parking | 104.30s | 18.963s | 203,792 KiB | 1,043 frames, 10 fps, max gap 0.1s | Completed |
-| car-incident | 34.17s | 9.196s | 195,200 KiB | 342 frames, 10 fps, max gap 0.1s | Completed |
-| two-person-argument | 57.57s | 22.963s | 196,108 KiB | 576 frames, 10 fps, max gap 0.1s | Completed |
+| car-parking | 104.30s | 21.294s | 202,720 KiB | 1,043 frames, 10 fps, max gap 0.1s | Completed |
+| car-incident | 34.17s | 12.475s | 195,828 KiB | 342 frames, 10 fps, max gap 0.1s | Completed |
+| two-person-argument | 57.57s | 33.801s | 197,804 KiB | 576 frames, 10 fps, max gap 0.1s | Completed |
 
 The assembled authenticated HTTP worker independently completed the three
-analyses in **18.017s, 9.285s and 22.194s**, respectively. It runs the actual
+analyses in **22.810s, 13.229s and 33.415s**, respectively. It runs the actual
 Python subprocess, rejects unauthorized requests, serializes jobs, deduplicates
 simultaneous force requests, saves dense sidecars and recovers the completed
 results from disk after a full local worker restart.
@@ -56,7 +66,7 @@ not whole-clip zero-error totals. Annotations and evidence generation are in
 `scripts/face-identity-reviewed-intervals.json` and
 `scripts/face-identity-interval-check.py` in the app repository.
 
-**The longer-occlusion gate still fails.** Controlled variants use four seconds
+**All three longer-occlusion cases now pass.** Controlled variants use four seconds
 of each real source with a fixed rectangle covering the union of the target's
 face positions for 1.5 seconds. This avoids a moving mask leaking the target's
 motion to optical flow. The target is visible at 0.4s, hidden for 0.5–2.0s, then
@@ -64,16 +74,18 @@ visible again at 2.0s (a 1.6s observation gap at 10 fps).
 
 | Source interval | ID before / after occluder | Result |
 | --- | --- | --- |
-| car-parking 77–81s | face-v2-1 → face-v2-2 | Fragmented |
-| car-incident 20–24s | face-v2-2 → face-v2-4 | Fragmented |
-| two-person-argument 25.5–29.5s | face-v2-2 → face-v2-6 | Fragmented |
+| car-parking 77–81s | face-v2-1 → face-v2-1 | PASS |
+| car-incident 20–24s | face-v2-2 → face-v2-2 | PASS |
+| two-person-argument 25.5–29.5s | face-v2-2 → face-v2-2 | PASS |
 
 These are controlled variants, not changes to user edits.
 `scripts/face-identity-occlusion-check.py` reproduces them and exits nonzero
-when the gate fails. The retained identity still exists at reveal time, but
-reacquisition rejects the changed geometry/appearance; retaining IDs longer
-alone is not the fix. The overall identity task remains open and this candidate
-must not be activated as certified speaker tracking.
+when a gate fails. Targets have **zero observations while hidden**, so their
+IDs were not borrowed by another visible participant or filled with invented
+points. Their identities remain correct at reveal and the post-reveal checks.
+The evaluated acceptance cases pass; unreviewed whole-clip identity error
+counts remain unknown, not zero. Speaker-to-face matching is still a separate
+unimplemented feature, not something an environment switch enables.
 
 ## Worker file mapping
 
@@ -95,8 +107,9 @@ keeps dense timed boxes/landmarks in a gzip sidecar, and returns only a manifest
 plus <=600 camera points per track to the app. Embeddings are ephemeral local
 memory: no embedding persistence, named recognition or cross-video lookup.
 No speaker capability is advertised. A result explicitly states
-`identityVerified: false`, because full-clip participant identity and real
-1.5-second occlusion certification are not established by these regression tests.
+`identityVerified: false`, because arbitrary new clips are not automatically
+certified by passing a reviewed acceptance suite. The separate speaker feature
+remains disabled until its speech-to-face implementation is verified.
 
 ## Bounds and recovery
 
@@ -119,7 +132,7 @@ No speaker capability is advertised. A result explicitly states
 The HTTP harness additionally needs the worker's own Node dependencies
 (including `@napi-rs/canvas@0.1.65`) available for the offline test. It expects a
 current worker snapshot in `generated-artifacts/worker-rollout-verified` and its
-GitHub tree response in `generated-artifacts/face-identity-keyframe/worker-tree.json`.
+GitHub tree response in `generated-artifacts/face-identity-v4/worker-tree.json`.
 Fetch those through the installed GitHub integration. The harness checks source
 blob hashes before assembling a temporary server. Temporary offline dependencies
 were removed from the web-app manifests after verification.
@@ -148,9 +161,9 @@ node --test worker-updates/face-identity/face-analysis.test.mjs
 .pythonlibs/bin/python scripts/face-identity-candidate-benchmark.py \
   --detector generated-artifacts/face-identity-v2/yunet.onnx \
   --appearance generated-artifacts/face-identity-v2/sface.onnx \
-  --output generated-artifacts/face-identity-keyframe
+  --output generated-artifacts/face-identity-v4
 .pythonlibs/bin/python scripts/face-identity-interval-check.py
-.pythonlibs/bin/python scripts/face-identity-occlusion-check.py # currently fails; do not ignore
+.pythonlibs/bin/python scripts/face-identity-occlusion-check.py
 node scripts/face-worker-queue-check.mjs
 npx tsx scripts/face-candidate-render-check.ts
 ```
@@ -160,7 +173,7 @@ unreviewed identity counts null. It does not claim success based on numeric IDs
 or contact sheets.
 
 App regression verification: eight relevant suites / 61 tests pass; TypeScript
-check passes. Candidate tests: 9 tracker tests, 2 analyzer cadence/limit tests
+check passes. Candidate tests: 12 tracker tests, 3 analyzer cadence/limit tests
 and 5 queue tests pass.
 `scripts/face-candidate-render-check.ts` separately checks strict point/schema,
 browser/native smoothing and geometry parity and decodes short 1080p/30fps
@@ -169,11 +182,11 @@ verification, not signed-in UI verification or participant-identity proof.
 
 ## Before rollout
 
-1. Fix the remaining controlled-occlusion failures before requesting activation.
+1. Review the passing acceptance report and request separate deployment approval.
    Default production analysis remains unchanged until candidate activation.
-2. Before speaker-follow, complete reviewed participant ground truth, crossings, scene boundaries and
-   real/controlled 1.5-second occlusion cases on all three clips. Swaps,
-   fragmentation and detector misses must be counted separately.
+2. Carry the reviewed cases into speaker-follow work. Keep unknown intervals
+   unknown, review new target clips and retain negative crossing, competing
+   identity, scene-cut and wrong-person checks. Detection misses are not swaps.
 3. Validate resource limits on the target Railway hardware. The real local
    authenticated queue now passes; that is not a target-hardware benchmark.
 4. Deploy only after approval and when **all** worker workloads, including face

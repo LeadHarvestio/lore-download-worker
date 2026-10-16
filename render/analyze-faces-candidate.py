@@ -71,7 +71,7 @@ def analyze(filename, model, evidence_file=None):
                 # Detect on a bounded preview, but align from the original pixels:
                 # a 15px preview face destroys the distinguishing appearance.
                 embedding = None
-                if appearance_keyframe:
+                if appearance_keyframe or tracker.needs_appearance(t, point):
                     original_face = face.copy()
                     original_face[:14:2] *= w / sw
                     original_face[1:14:2] *= h / sh
@@ -108,12 +108,18 @@ def analyze(filename, model, evidence_file=None):
             with gzip.open(temporary, "wt", encoding="utf8") as out:
                 json.dump({"manifest": manifest, "frames": evidence}, out, separators=(",", ":"))
             os.replace(temporary, evidence_file)
+        elapsed = time.monotonic() - started
+        if elapsed > 55:
+            if evidence_file:
+                os.remove(evidence_file)
+            raise TimeoutError("Face analysis exceeded its 55-second active budget. No partial result was accepted.")
         return {"tracks": compact, "thumbnails": [{"faceId": k, "jpegBase64": v} for k, v in thumbnails.items() if k in ids],
-                "duration": duration, "analysisSeconds": round(time.monotonic() - started, 3),
+                "duration": duration, "analysisSeconds": round(elapsed, 3),
                 "detector": "YuNet-2023mar/" + VERSION, "sampleFps": 10,
                 "evidence": manifest, "ambiguousAssociationsRejected": tracker.ambiguous,
                 "appearanceEvaluations": appearance_evaluations,
                 "appearanceKeyframeFps": 2,
+                "appearanceBootstrapSamples": 3,
                 "identityVerified": False}
     finally:
         capture.release()

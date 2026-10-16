@@ -9,7 +9,7 @@ from functools import lru_cache
 import cv2
 import numpy as np
 
-VERSION = "local-motion-keyframe-v3"
+VERSION = "local-motion-keyframe-v4"
 MAX_LOSS = 1.6  # 1.5-second hidden interval plus a sampling boundary
 MAX_CANDIDATES = 24
 
@@ -41,7 +41,11 @@ def appearance(frame, box):
         norm = np.linalg.norm(gray)
         if norm > 10:
             texture = gray.flatten() / norm
-    return histogram(face), histogram(shirt), texture
+    quality = 0.
+    if face.size >= 12:
+        normalized = cv2.resize(cv2.cvtColor(face, cv2.COLOR_BGR2GRAY), (64, 64))
+        quality = float(cv2.Laplacian(normalized, cv2.CV_64F).var())
+    return histogram(face), histogram(shirt), texture, quality
 
 
 def appearance_distance(a, b):
@@ -90,11 +94,45 @@ class IdentityTracker:
         self.previous_gray = None
         self.previous_hist = None
 
+    def needs_appearance(self, t, detection):
+        """Bounded bootstrap or reacquisition, in addition to 2-Hz keyframes."""
+        size = np.array([detection["w"], detection["h"]])
+        center = np.array([detection["x"], detection["y"]]) + size / 2
+        for state in self.active.values():
+            distance = np.linalg.norm((center - state["center"] - state["camera"]) /
+                                      np.maximum(size, state["size"]))
+            if t - state["t"] <= .21 and distance < 1.1:
+                return state.get("appearance_samples", 0) < 3
+        return True
+
+    @staticmethod
+    def body_features(gray, center, size):
+        """Seed torso features only when a face has been positively observed.
+
+        Spread them vertically so a head occluder cannot remove every point.
+        During a loss these points are propagated, never re-seeded on guessed
+        pixels that might belong to another person or the background.
+        """
+        h, w = gray.shape
+        x0, x1 = np.clip((center[0] + np.array([-.8, .8]) * size[0]) * w, 0, w).astype(int)
+        top, bottom = np.clip((center[1] + np.array([.55, 2.2]) * size[1]) * h, 0, h).astype(int)
+        points = []
+        for y0, y1 in zip(np.linspace(top, bottom, 4, dtype=int)[:-1],
+                          np.linspace(top, bottom, 4, dtype=int)[1:]):
+            if x1 <= x0 or y1 <= y0:
+                continue
+            mask = np.zeros_like(gray)
+            mask[y0:y1, x0:x1] = 255
+            found = cv2.goodFeaturesToTrack(gray, 6, .02, 2, mask=mask)
+            if found is not None:
+                points.extend(found)
+        return np.array(points, np.float32).reshape(-1, 1, 2)
+
     def camera_motion(self, frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
         hist /= max(1, hist.sum())
-        shift = np.zeros(2)
+        transform = np.array([[1., 0., 0.], [0., 1., 0.]])
         cut = False
         previous = self.previous_gray
         if previous is not None:
@@ -109,21 +147,25 @@ class IdentityTracker:
                         affine, inliers = cv2.estimateAffinePartial2D(
                             features[good], moved[good], method=cv2.RANSAC, ransacReprojThreshold=3)
                         if affine is not None and inliers.sum() >= 8:
-                            # A single global translation is deliberately conservative.
-                            shift = affine[:, 2] / np.array([gray.shape[1], gray.shape[0]])
-                            shift = np.clip(shift, -.25, .25)
+                            # Rotation/zoom translation is not a uniform motion.
+                            dimensions = np.array([gray.shape[1], gray.shape[0]])
+                            transform[:, :2] = affine[:, :2] * dimensions / dimensions[:, None]
+                            transform[:, 2] = affine[:, 2] / dimensions
         self.previous_gray, self.previous_hist = gray, hist
-        return shift, cut
+        return transform, cut
 
     def update(self, t, detections, frame, force_scene_cut=False, embeddings=None):
         # Track local image features as well as global camera translation.
         # Rotation/perspective can move two faces in very different directions.
-        local_motion = {}
+        local_motion, body_motion = {}, {}
         if self.previous_gray is not None and self.active:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             h, w = gray.shape
             features, owners = [], []
             for key, state in self.active.items():
+                for point in state.get("body_points", []):
+                    features.append(point)
+                    owners.append((key, "body"))
                 if t - state["t"] > .31:
                     continue
                 center = state["center"] + state["camera"]
@@ -135,7 +177,7 @@ class IdentityTracker:
                 points = cv2.goodFeaturesToTrack(self.previous_gray, 12, .01, 2, mask=mask)
                 if points is not None:
                     features.extend(points)
-                    owners.extend([key] * len(points))
+                    owners.extend([(key, "face")] * len(points))
             if features:
                 old = np.array(features, dtype=np.float32)
                 moved, status, _ = cv2.calcOpticalFlowPyrLK(
@@ -143,28 +185,41 @@ class IdentityTracker:
                 if moved is not None:
                     back, back_status, _ = cv2.calcOpticalFlowPyrLK(gray, self.previous_gray, moved, None)
                     errors = np.linalg.norm((back - old).reshape(-1, 2), axis=1)
-                    for key in self.active:
-                        valid = np.array([owner == key for owner in owners]) & status.reshape(-1).astype(bool)
-                        valid &= back_status.reshape(-1).astype(bool) & (errors < 1.5)
-                        if valid.sum() >= 3:
-                            local_motion[key] = np.median((moved - old).reshape(-1, 2)[valid], axis=0) / [w, h]
-        shift, cut = self.camera_motion(frame)
+                    for key, state in self.active.items():
+                        for kind in ("body", "face"):
+                            valid = np.array([owner == (key, kind) for owner in owners]) & status.reshape(-1).astype(bool)
+                            valid &= back_status.reshape(-1).astype(bool) & (errors < 1.5)
+                            displacement = (moved - old).reshape(-1, 2)
+                            if valid.sum() >= 3:
+                                median = np.median(displacement[valid], axis=0)
+                                valid &= np.linalg.norm(displacement - median, axis=1) < 2.5
+                            if kind == "body":
+                                state["body_points"] = moved[valid] if valid.sum() >= 3 else []
+                                if valid.sum() >= 3:
+                                    body_motion[key] = np.median(displacement[valid], axis=0) / [w, h]
+                                else:
+                                    state["body_since"] = None
+                            elif valid.sum() >= 3:
+                                local_motion[key] = np.median(displacement[valid], axis=0) / [w, h]
+        transform, cut = self.camera_motion(frame)
         if cut or force_scene_cut:
             self.active.clear()
             self.scene += 1
         self.active = {key: value for key, value in self.active.items() if t - value["t"] <= MAX_LOSS + 1e-6}
         # Move even hidden tracks with the camera, but never emit invented boxes.
         for key, state in self.active.items():
-            state["camera"] += local_motion.get(key, shift)
+            center = state["center"] + state["camera"]
+            global_motion = np.clip(transform @ np.append(center, 1.) - center, -.25, .25)
+            state["camera"] += local_motion.get(key, body_motion.get(key, global_motion))
         keys = sorted(self.active, key=lambda k: self.active[k]["t"], reverse=True)[:MAX_CANDIDATES]
         features = [appearance(frame, [d[k] for k in ("x", "y", "w", "h")]) for d in detections]
         embeddings = embeddings or [None] * len(detections)
-        costs = []
+        costs, continuity = [], {}
         for key in keys:
             state = self.active[key]
             age = t - state["t"]
             predicted = state["center"] + state["camera"]
-            if key not in local_motion:
+            if key not in local_motion and key not in body_motion:
                 predicted += state["velocity"] * min(age, .5)
             row = []
             for detection, feature, embedding in zip(detections, features, embeddings):
@@ -176,17 +231,34 @@ class IdentityTracker:
                 # single first-frame appearance under blur, profile or clipping.
                 # Anchors constrain reacquisition, not every visible-frame match.
                 recent_looks = appearance_distance(state["appearance"], feature)
-                continuous = age <= .21 and distance < 1.1 and key in local_motion
+                body_continuity = (key in body_motion and state.get("body_since") is not None
+                                   and state["body_since"] <= state["t"] + 1e-6 and distance < 1.1)
+                continuous = (age <= .21 and distance < 1.1 and key in local_motion) or body_continuity
                 looks = recent_looks if continuous else max(recent_looks,
                     .65 * appearance_distance(state["anchor"], feature))
                 similarity = None
                 if embedding is not None and state.get("embeddings"):
                     similarity = max(float(np.dot(e, embedding)) for e in state["embeddings"])
+                # Hidden faces have larger positional uncertainty. Widen motion
+                # only with discriminative identity evidence, never time alone.
+                competitors = [max(float(np.dot(e, embedding)) for e in other["embeddings"])
+                               for other_key, other in self.active.items()
+                               if other_key != key and embedding is not None and other.get("embeddings")]
+                strong_identity = (similarity is not None and
+                                   (similarity >= .4 or (similarity >= .37 and looks <= .28)) and
+                                   similarity - max(competitors, default=-1) >= .1)
                 limit = (2.5 if similarity is not None and similarity > .65 else 1.2) + min(age, 1.5) * .5
+                if age > .21 and strong_identity:
+                    limit = 1.2 + min(age, 1.6) * 3
                 # Poor SFace similarities on tiny/turning faces must not break a
                 # strong optical track. Require conflicting visual evidence too.
                 invalid_appearance = looks > (.65 if continuous else .38)
-                if similarity is not None and similarity < .2 and looks > .25:
+                if strong_identity:
+                    invalid_appearance = False
+                degraded = feature[3] < .3 * state.get("quality_peak", feature[3])
+                if similarity is not None and similarity < .2 and looks > .25 and not (continuous and degraded):
+                    invalid_appearance = True
+                if age > .21 and similarity is not None and similarity < .2:
                     invalid_appearance = True
                 if distance > limit or scale > .85 or invalid_appearance:
                     row.append(math.inf)
@@ -196,8 +268,9 @@ class IdentityTracker:
                         identity_cost = .35 * (1 - similarity) + .3 * looks
                     # Retained lost tracks must not tie the freshly observed
                     # track and trigger a permanent ambiguity/birth feedback loop.
-                    row.append(.5 * distance / limit + .1 * scale + identity_cost +
+                    row.append((.25 if age > .21 and strong_identity else .5) * distance / limit + .1 * scale + identity_cost +
                                .15 * min(age, 1.5))
+                continuity[key, len(row) - 1] = continuous
             costs.append(row)
         # Reject ambiguous rows/columns BEFORE assignment. A global optimizer alone
         # can otherwise force a plausible-looking wrong identity.
@@ -224,20 +297,25 @@ class IdentityTracker:
             if key is None:
                 self.serial += 1
                 key = "face-v2-" + str(self.serial)
-                state = {"velocity": np.zeros(2), "anchor": feature, "embeddings": []}
+                state = {"velocity": np.zeros(2), "anchor": feature, "embeddings": [], "appearance_samples": 0}
             else:
                 state = self.active[key]
                 dt = max(.01, t - state["t"])
                 velocity = (center - state["center"] - state["camera"]) / dt
                 state["velocity"] = np.clip(.6 * state["velocity"] + .4 * velocity, -.5, .5)
-            state.update(t=t, center=center, size=size, camera=np.zeros(2), appearance=feature)
+            state.update(t=t, center=center, size=size, camera=np.zeros(2), appearance=feature,
+                         body_points=self.body_features(self.previous_gray, center, size), body_since=t,
+                         quality_peak=max(state.get("quality_peak", 0.) * .98, feature[3]))
             # Short, in-memory gallery only. Never serialize embeddings, associate
             # names, search other videos, or update a template from an uncertain match.
             if embedding is not None:
+                state["appearance_samples"] = state.get("appearance_samples", 0) + 1
                 if not state["embeddings"]:
                     state["embeddings"].append(embedding)
-                elif max(float(np.dot(e, embedding)) for e in state["embeddings"]) > .65:
-                    state["embeddings"] = [state["embeddings"][0], embedding]
+                elif feature[3] >= .3 * state["quality_peak"] and (
+                    continuity.get((key, j), False) or max(float(np.dot(e, embedding)) for e in state["embeddings"]) > .65
+                ):
+                    state["embeddings"] = [state["embeddings"][0], *state["embeddings"][1:][-2:], embedding]
             self.active[key] = state
             output.append({**point, "faceId": key})
         # Bounded retained state even during a noisy detector burst.

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 // Candidate is explicitly staging-only until the reviewed identity gate passes.
 // Never silently replace the current production tracker or change saved IDs.
-const version = "local-motion-keyframe-v3";
+const version = "local-motion-keyframe-v4";
 export function createFaceAnalysisQueue(directory, isRendererBusy, onIdle = () => {}, options = {}) {
   const candidate = options.candidate ?? process.env.FACE_ANALYSIS_CANDIDATE === "1";
   const script = fileURLToPath(new URL(candidate ? "./analyze-faces-candidate.py" : "./analyze-faces.py", import.meta.url));

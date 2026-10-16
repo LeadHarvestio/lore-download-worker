@@ -64,13 +64,13 @@ class AnalyzerTests(unittest.TestCase):
             result = analyzer.analyze("fixture.mp4", "fixture.onnx")
         return result, recognizer
 
-    def test_dense_clock_stays_10fps_while_appearance_is_2hz(self):
+    def test_dense_clock_stays_10fps_with_bounded_appearance_bootstrap(self):
         result, recognizer = self.run_analysis(Capture())
         self.assertEqual(result["evidence"]["frames"], 10)
         self.assertEqual(result["sampleFps"], 10)
         self.assertEqual(result["evidence"]["maxSampleGapSeconds"], .1)
-        self.assertEqual(recognizer.evaluations, 2)
-        self.assertEqual(result["appearanceEvaluations"], 2)
+        self.assertEqual(recognizer.evaluations, 4)  # .0/.1/.2 bootstrap, then .5 keyframe
+        self.assertEqual(result["appearanceEvaluations"], 4)
         self.assertEqual(result["appearanceKeyframeFps"], 2)
         self.assertFalse(result["identityVerified"])
 
@@ -79,6 +79,11 @@ class AnalyzerTests(unittest.TestCase):
             self.run_analysis(Capture(count=30 * 181))
         with self.assertRaisesRegex(ValueError, "10 fps"):
             self.run_analysis(Capture(fps=5))
+
+    def test_last_frame_cannot_finish_over_budget_and_return_success(self):
+        with patch.object(analyzer.time, "monotonic", side_effect=[0.] * 11 + [56.]):
+            with self.assertRaisesRegex(TimeoutError, "55-second active budget"):
+                self.run_analysis(Capture())
 
 
 if __name__ == "__main__":
