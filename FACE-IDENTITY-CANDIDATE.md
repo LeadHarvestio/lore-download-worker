@@ -1,27 +1,37 @@
-# Face-association candidate — NOT RELEASE READY
+# Face-association fix — reported regressions verified
 
 This is an isolated worker experiment, not enabled speaker-follow and not a
-production face-tracker replacement. The release source of truth will be the
-draft worker pull request. No saved edit, production row, final render,
+production face-tracker replacement. Draft worker PR:
+<https://github.com/LeadHarvestio/lore-download-worker/pull/41>.
+No saved edit, production row, final render,
 transcription, merge, Railway configuration or deployment was changed.
 
-## Result: identity gate NOT PASSED
+## Result: reported regression checks PASS; full speaker identity gate unverified
 
-Three approaches were evaluated: global motion/color matching; local optical
-flow plus color; and local flow plus original-resolution SFace appearance.
-Color-only tracking improved the two previously reviewed car gaps, but still
-fragmented IDs in the multi-person argument. The stronger model did not solve
-the release blocker: reviewed car intervals still fragment, and the argument
-source exceeds the existing 55-second active budget. Do not raise that timeout
-or enable speaker-follow and call the gate passed.
+The two reported failures are fixed in `local-motion-keyframe-v3`:
+
+- Unreliable embeddings from tiny/blurred faces no longer override strong
+  continuous visual tracking. Appearance anchors constrain reacquisition rather
+  than every visible frame. Fresh observations are preferred over stale
+  candidates; out-of-frame feature masks are clamped correctly.
+- Dense detector/landmark evidence stays at **10 fps**. Expensive appearance
+  inference uses **2 Hz keyframes**, rather than being repeated on every frame.
+  Lost tracks do not repeatedly run local optical flow on stale image regions.
+- The 55-second active and 60-second subprocess limits are unchanged.
 
 Latest reproducible full-source benchmark (local CPU, one thread, sequential):
 
 | Source | Duration | Analysis | Child peak RSS | Dense evidence | Result |
 |---|---:|---:|---:|---|---|
-| car-parking | 104.30s | 29.895s | 202,896 KiB | 1,043 frames, 10 fps, max gap 0.1s | Completed; identity gate not passed |
-| car-incident | 34.17s | 19.177s | 196,128 KiB | 342 frames, 10 fps, max gap 0.1s | Completed; identity gate not passed |
-| two-person-argument | 57.57s | stopped at 55s | 197,736 KiB | No partial result accepted | Budget failure |
+| car-parking | 104.30s | 18.963s | 203,792 KiB | 1,043 frames, 10 fps, max gap 0.1s | Completed |
+| car-incident | 34.17s | 9.196s | 195,200 KiB | 342 frames, 10 fps, max gap 0.1s | Completed |
+| two-person-argument | 57.57s | 22.963s | 196,108 KiB | 576 frames, 10 fps, max gap 0.1s | Completed |
+
+The assembled authenticated HTTP worker independently completed the three
+analyses in **18.017s, 9.285s and 22.194s**, respectively. It runs the actual
+Python subprocess, rejects unauthorized requests, serializes jobs, deduplicates
+simultaneous force requests, saves dense sidecars and recovers the completed
+results from disk after a full local worker restart.
 
 Numbers describe this development CPU, **not** a Railway performance guarantee.
 Full-clip identity-switch counts remain **unknown**, not zero. Source-specific
@@ -29,15 +39,22 @@ human continuity annotations and real-footage 1.5-second occlusion coverage
 remain incomplete. Synthetic crossings and a 1.5-second missing-detection
 interval passing unit tests do not substitute for those.
 
-Known latest-candidate fragmentation in the already reviewed same-person
-intervals:
+Manually reviewed regression intervals, checked using version-independent
+participant annotations rather than assuming detector IDs are identities:
 
-- car-parking: `face-v2-16` at 78.9s, `face-v2-15` at 79.0s,
-  `face-v2-19` at 79.3s. The track is not continuous.
-- car-incident: the foreground seated participant is `face-v2-31` at 21.8s,
-  then `face-v2-37` at 22.0s and `face-v2-33` at 22.1s.
-- No current full result exists for the argument source; earlier failed
-  candidates are not substituted as evidence that the latest one passes.
+- car-parking, **78.7–79.8s**: seated participant retains one ID through rapid
+  camera movement and the short missed detection.
+- car-incident, **21.5–22.5s**: seated participant retains one ID across the two
+  brief detection gaps.
+- two-person-argument, **27.0–28.3s**: lime-vest participant retains one ID;
+  foreground and tall orange-vest participants keep different IDs. The
+  previously observed wrong-person transfer is absent in this interval.
+
+All **48 manually associated observations** across five participant intervals
+pass continuity and distinct-person checks. These are interval-level results,
+not whole-clip zero-error totals. Annotations and evidence generation are in
+`scripts/face-identity-reviewed-intervals.json` and
+`scripts/face-identity-interval-check.py` in the app repository.
 
 ## Worker file mapping
 
@@ -46,7 +63,8 @@ future work. In the worker branch:
 
 - Map `render/analyze-faces.py` here to **`render/analyze-faces-candidate.py`**.
   Keep the existing `render/analyze-faces.py` unchanged.
-- Add `render/identity_tracker.py` and `render/identity_tracker_test.py`.
+- Add `render/identity_tracker.py`, `render/identity_tracker_test.py` and
+  `render/analyze_faces_test.py`.
 - Update `render/face-analysis.js` with the isolated candidate selection.
 - Map `face-analysis.test.mjs` to `face-analysis-candidate.test.mjs` in worker root.
 - Install the pinned appearance model and its license in the worker image.
@@ -58,7 +76,8 @@ keeps dense timed boxes/landmarks in a gzip sidecar, and returns only a manifest
 plus <=600 camera points per track to the app. Embeddings are ephemeral local
 memory: no embedding persistence, named recognition or cross-video lookup.
 No speaker capability is advertised. A result explicitly states
-`identityVerified: false`.
+`identityVerified: false`, because full-clip participant identity and real
+1.5-second occlusion certification are not established by these regression tests.
 
 ## Bounds and recovery
 
@@ -90,6 +109,10 @@ Models:
 Use OpenCV **4.11.0.86**, matching the worker image, not an untested major
 upgrade. Keep model binaries, originals, contact sheets and MP4 test outputs
 under ignored `generated-artifacts/`; never check them into either repository.
+`requirements-test.txt` records the offline test dependencies. They were
+removed from the main app's dependency manifest after testing so publication
+does not install an unnecessary video-analysis stack. Set up that test
+environment before running these commands.
 
 ```sh
 .pythonlibs/bin/python -m unittest discover \
@@ -97,7 +120,11 @@ under ignored `generated-artifacts/`; never check them into either repository.
 node --test worker-updates/face-identity/face-analysis.test.mjs
 .pythonlibs/bin/python scripts/face-identity-candidate-benchmark.py \
   --detector generated-artifacts/face-identity-v2/yunet.onnx \
-  --appearance generated-artifacts/face-identity-v2/sface.onnx
+  --appearance generated-artifacts/face-identity-v2/sface.onnx \
+  --output generated-artifacts/face-identity-keyframe
+.pythonlibs/bin/python scripts/face-identity-interval-check.py
+node scripts/face-worker-queue-check.mjs
+npx tsx scripts/face-candidate-render-check.ts
 ```
 
 The benchmark intentionally exits nonzero if any source fails. Its JSON leaves
@@ -105,7 +132,8 @@ unreviewed identity counts null. It does not claim success based on numeric IDs
 or contact sheets.
 
 App regression verification: eight relevant suites / 61 tests pass; TypeScript
-check passes. Candidate tests: 7 tracker tests and 5 queue tests pass.
+check passes. Candidate tests: 9 tracker tests, 2 analyzer cadence/limit tests
+and 5 queue tests pass.
 `scripts/face-candidate-render-check.ts` separately checks strict point/schema,
 browser/native smoothing and geometry parity and decodes short 1080p/30fps
 synthetic MP4s in blur-fit and fill after source cuts. That is render-contract
@@ -113,15 +141,14 @@ verification, not signed-in UI verification or participant-identity proof.
 
 ## Before rollout
 
-1. Resolve tiny/moving face fragmentation and the multi-person CPU budget
-   without relaxing identity assertions or sacrificing the 10 fps evidence.
-2. Complete reviewed participant ground truth, crossings, scene boundaries and
+1. Review the measured fixes and request separate merge/deployment approval.
+   Default production analysis remains unchanged until candidate activation.
+2. Before speaker-follow, complete reviewed participant ground truth, crossings, scene boundaries and
    real/controlled 1.5-second occlusion cases on all three clips. Swaps,
    fragmentation and detector misses must be counted separately.
-3. Validate resource limits on the target Railway hardware and the assembled
-   authenticated analysis queue. A local mocked queue is not that proof.
-4. Only after these pass, request separate merge/deployment approval, publish
-   any compatible app changes first and wait for **all** worker workloads,
-   including face analysis, to become idle.
+3. Validate resource limits on the target Railway hardware. The real local
+   authenticated queue now passes; that is not a target-hardware benchmark.
+4. Deploy only after approval and when **all** worker workloads, including face
+   analysis, are idle. No web-app runtime changes are required by this fix.
 5. Speaker-follow remains separate: diarization, mouth evidence, voice-to-face
    confidence, off-camera handling and camera hysteresis are not implemented.

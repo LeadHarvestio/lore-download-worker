@@ -9,7 +9,7 @@ from functools import lru_cache
 import cv2
 import numpy as np
 
-VERSION = "local-motion-sface-v2"
+VERSION = "local-motion-keyframe-v3"
 MAX_LOSS = 1.6  # 1.5-second hidden interval plus a sampling boundary
 MAX_CANDIDATES = 24
 
@@ -124,11 +124,13 @@ class IdentityTracker:
             h, w = gray.shape
             features, owners = [], []
             for key, state in self.active.items():
+                if t - state["t"] > .31:
+                    continue
                 center = state["center"] + state["camera"]
                 size = state["size"]
                 mask = np.zeros_like(gray)
-                x0, y0 = np.maximum(0, (center - size * .65) * [w, h]).astype(int)
-                x1, y1 = np.minimum([w, h], (center + size * .65) * [w, h]).astype(int)
+                x0, y0 = np.clip((center - size * .65) * [w, h], 0, [w, h]).astype(int)
+                x1, y1 = np.clip((center + size * .65) * [w, h], 0, [w, h]).astype(int)
                 mask[y0:y1, x0:x1] = 255
                 points = cv2.goodFeaturesToTrack(self.previous_gray, 12, .01, 2, mask=mask)
                 if points is not None:
@@ -170,19 +172,32 @@ class IdentityTracker:
                 center = np.array([detection["x"], detection["y"]]) + size / 2
                 distance = np.linalg.norm((center - predicted) / np.maximum(size, state["size"]))
                 scale = float(np.max(np.abs(np.log(size / state["size"]))))
-                # Match against a slowly updated template AND the immutable anchor.
-                looks = max(appearance_distance(state["appearance"], feature),
-                            .8 * appearance_distance(state["anchor"], feature))
+                # Short-term optical correspondence is more reliable than a
+                # single first-frame appearance under blur, profile or clipping.
+                # Anchors constrain reacquisition, not every visible-frame match.
+                recent_looks = appearance_distance(state["appearance"], feature)
+                continuous = age <= .21 and distance < 1.1 and key in local_motion
+                looks = recent_looks if continuous else max(recent_looks,
+                    .65 * appearance_distance(state["anchor"], feature))
                 similarity = None
                 if embedding is not None and state.get("embeddings"):
                     similarity = max(float(np.dot(e, embedding)) for e in state["embeddings"])
                 limit = (2.5 if similarity is not None and similarity > .65 else 1.2) + min(age, 1.5) * .5
-                invalid_appearance = looks > .38 if similarity is None else similarity < .42
+                # Poor SFace similarities on tiny/turning faces must not break a
+                # strong optical track. Require conflicting visual evidence too.
+                invalid_appearance = looks > (.65 if continuous else .38)
+                if similarity is not None and similarity < .2 and looks > .25:
+                    invalid_appearance = True
                 if distance > limit or scale > .85 or invalid_appearance:
                     row.append(math.inf)
                 else:
-                    identity_cost = 1.4 * looks if similarity is None else .7 * (1 - similarity) + .2 * looks
-                    row.append(.2 * distance / limit + .1 * scale + identity_cost)
+                    identity_cost = .45 * looks
+                    if similarity is not None and not continuous:
+                        identity_cost = .35 * (1 - similarity) + .3 * looks
+                    # Retained lost tracks must not tie the freshly observed
+                    # track and trigger a permanent ambiguity/birth feedback loop.
+                    row.append(.5 * distance / limit + .1 * scale + identity_cost +
+                               .15 * min(age, 1.5))
             costs.append(row)
         # Reject ambiguous rows/columns BEFORE assignment. A global optimizer alone
         # can otherwise force a plausible-looking wrong identity.

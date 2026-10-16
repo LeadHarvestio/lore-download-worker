@@ -29,7 +29,8 @@ def analyze(filename, model, evidence_file=None):
         if fps < 10:
             raise ValueError("Source frame rate is below the required 10 fps evidence rate.")
         tracker, tracks, thumbnails, evidence = IdentityTracker(), {}, {}, []
-        next_t, frame_index, last_t = 0., 0, -1.
+        next_t, frame_index, last_t, next_appearance_t = 0., 0, -1., 0.
+        appearance_evaluations = 0
         while True:
             ok, frame = capture.read()
             if not ok:
@@ -52,6 +53,11 @@ def analyze(filename, model, evidence_file=None):
             detector.setInputSize((sw, sh))
             _, faces = detector.detect(small)
             detections, landmarks, embeddings = [], [], []
+            # Face boxes + landmarks remain 10 fps. Expensive appearance inference
+            # is keyframe evidence (2 Hz), not a mouth-evidence sampling clock.
+            appearance_keyframe = t + 1e-6 >= next_appearance_t
+            if appearance_keyframe:
+                next_appearance_t = t + .5
             for face in sorted(faces if faces is not None else [], key=lambda f: f[2] * f[3], reverse=True)[:8]:
                 x, y, fw, fh = [float(n) for n in face[:4]]
                 point = {"t": round(t, 4), "x": min(1, max(0, x / sw)), "y": min(1, max(0, y / sh)),
@@ -64,12 +70,16 @@ def analyze(filename, model, evidence_file=None):
                                   for i in range(4, 14, 2)])
                 # Detect on a bounded preview, but align from the original pixels:
                 # a 15px preview face destroys the distinguishing appearance.
-                original_face = face.copy()
-                original_face[:14:2] *= w / sw
-                original_face[1:14:2] *= h / sh
-                vector = recognizer.feature(recognizer.alignCrop(frame, original_face)).flatten()
-                norm = float(cv2.norm(vector))
-                embeddings.append(vector / norm if norm > 0 else None)
+                embedding = None
+                if appearance_keyframe:
+                    original_face = face.copy()
+                    original_face[:14:2] *= w / sw
+                    original_face[1:14:2] *= h / sh
+                    vector = recognizer.feature(recognizer.alignCrop(frame, original_face)).flatten()
+                    norm = float(cv2.norm(vector))
+                    embedding = vector / norm if norm > 0 else None
+                    appearance_evaluations += 1
+                embeddings.append(embedding)
             points = tracker.update(t, detections, small, embeddings=embeddings)
             evidence.append({"t": round(t, 4), "scene": tracker.scene, "faces":
                              [{**p, "landmarks": lm} for p, lm in zip(points, landmarks)]})
@@ -102,6 +112,8 @@ def analyze(filename, model, evidence_file=None):
                 "duration": duration, "analysisSeconds": round(time.monotonic() - started, 3),
                 "detector": "YuNet-2023mar/" + VERSION, "sampleFps": 10,
                 "evidence": manifest, "ambiguousAssociationsRejected": tracker.ambiguous,
+                "appearanceEvaluations": appearance_evaluations,
+                "appearanceKeyframeFps": 2,
                 "identityVerified": False}
     finally:
         capture.release()

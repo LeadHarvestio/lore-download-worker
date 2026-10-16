@@ -24,7 +24,7 @@ function fixture(options = {}) {
     close() { fs.rmSync(directory, { recursive: true, force: true }); },
   };
 }
-const candidateResult = { tracks: [], evidence: { version: "local-motion-sface-v2", sampleFps: 10 } };
+const candidateResult = { tracks: [], evidence: { version: "local-motion-keyframe-v3", sampleFps: 10 } };
 
 test("default remains legacy, candidate is explicit and cache namespaces differ", () => {
   const f = fixture({ candidate: false });

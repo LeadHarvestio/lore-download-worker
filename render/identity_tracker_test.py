@@ -44,6 +44,23 @@ class IdentityTests(unittest.TestCase):
         second = tracker.update(.1, [point(.1)], frame([(.2, (0, 0, 255))]), embeddings=[np.array([0., 1.])])[0]
         self.assertNotEqual(first["faceId"], second["faceId"])
 
+    def test_unreliable_embedding_cannot_reset_continuous_visual_track(self):
+        tracker = IdentityTracker()
+        image = frame([(.2, (20, 190, 240))])
+        first = tracker.update(0, [point(0)], image, embeddings=[np.array([1., 0.])])[0]
+        # The appearance network may disagree under blur/profile. Without
+        # contradictory image evidence this is not a new person.
+        after = tracker.update(.1, [point(.1)], image, embeddings=[np.array([0., 1.])])[0]
+        self.assertEqual(first["faceId"], after["faceId"])
+
+    def test_missing_embedding_keyframes_keep_a_continuous_track(self):
+        tracker = IdentityTracker()
+        image = frame([(.2, (20, 190, 240))])
+        first = tracker.update(0, [point(0)], image, embeddings=[np.array([1., 0.])])[0]
+        for i in range(1, 10):
+            after = tracker.update(i / 10, [point(i / 10)], image)[0]
+            self.assertEqual(first["faceId"], after["faceId"])
+
     def test_one_to_one_and_crossing_preserve_distinct_known_appearances(self):
         tracker = IdentityTracker()
         embeddings = [np.array([1., 0.]), np.array([0., 1.])]
