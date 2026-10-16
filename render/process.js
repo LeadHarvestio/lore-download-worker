@@ -154,7 +154,7 @@ export async function processClip(p) {
     sourceWidth: info.width, sourceHeight: info.height, source, sourceEdit: p.sourceEdit, workDir: p.workDir,
     previewAt: preview ? p.previewAt : undefined, originalPath: p.inputPath, originalIndex: preview ? 0 : undefined });
   const sounds = await prepareSoundEffects({ effects: style.soundEffects, args, nextIndex: creative.nextIndex,
-    duration: info.duration, preview });
+    duration: info.duration, preview, words: p.speechWords ?? p.words });
   const tags = prepareNameTags({ style, args, nextIndex: sounds.nextIndex, width, height, sw: info.width, sh: info.height,
     edit: p.sourceEdit, duration: info.duration, workDir: p.workDir, at: preview ? p.previewAt : undefined, label: creative.label });
   const f = [
