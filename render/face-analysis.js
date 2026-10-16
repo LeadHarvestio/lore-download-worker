@@ -21,8 +21,9 @@ export function createFaceAnalysisQueue(directory, isRendererBusy, onIdle = () =
     if (isRendererBusy()) { clearTimeout(timer); timer = setTimeout(pump, 1000); timer.unref(); return; }
     const item = queue.shift(), job = jobs.get(item.jobId);
     active = true; job.status = "processing"; job.startedAt = Date.now();
-    execute(process.env.PYTHON_BIN || "python3", [script, item.file, ...(candidate ? ["--evidence", item.evidence] : [])], {
-      timeout: 60000, maxBuffer: 3 * 1024 * 1024,
+     execute(process.env.PYTHON_BIN || "python3", [script, item.file, ...(candidate ? ["--evidence", item.evidence] : []),
+      ...(item.speakers ? ["--speakers"] : [])], {
+      timeout: item.speakers ? 240000 : 60000, maxBuffer: 5 * 1024 * 1024,
       env: { ...process.env, OPENBLAS_NUM_THREADS: "1", OMP_NUM_THREADS: "1" },
     }, (error, stdout, stderr) => {
       try {
@@ -62,7 +63,8 @@ export function createFaceAnalysisQueue(directory, isRendererBusy, onIdle = () =
       const file = path.join(cacheDir, `${identity}.evidence.json.gz`);
       return fs.existsSync(file) ? fs.readFileSync(file) : null;
     },
-    enqueue(filename, force = false) {
+    enqueue(filename, force = false, speakers = false) {
+      if (speakers && !candidate) throw Error("Speaker analysis requires the validated identity tracker.");
       if (typeof filename !== "string" || !/^[A-Za-z0-9_.-]+\.mp4$/i.test(filename) || filename.includes("..")) throw Error("Invalid source filename.");
       const file = path.join(directory, filename), stat = fs.statSync(file);
       const activeIdentities = new Set([...identities].filter(([, id]) =>
@@ -73,7 +75,7 @@ export function createFaceAnalysisQueue(directory, isRendererBusy, onIdle = () =
         if (Date.now() - fs.statSync(cached).mtimeMs > retention) fs.unlinkSync(cached);
       }
       const identity = crypto.createHash("sha256").update(JSON.stringify([
-        filename, stat.size, stat.mtimeMs, candidate ? version : "yunet-2023mar-v1",
+        filename, stat.size, stat.mtimeMs, candidate ? `${version}/${speakers ? "light-asd-talkset-v1" : "faces"}` : "yunet-2023mar-v1",
       ])).digest("hex");
       const previous = identities.get(identity);
       const prior = jobs.get(previous);
@@ -91,7 +93,7 @@ export function createFaceAnalysisQueue(directory, isRendererBusy, onIdle = () =
           Object.assign(job, { status: "completed", result: saved.result, cached: true, finishedAt: Date.now() });
       } catch {}
       jobs.set(jobId, job); identities.set(identity, jobId);
-      if (job.status !== "completed") { queue.push({ jobId, file, identity, cache, evidence }); pump(); }
+      if (job.status !== "completed") { queue.push({ jobId, file, identity, cache, evidence, speakers }); pump(); }
       return job;
     },
   };
