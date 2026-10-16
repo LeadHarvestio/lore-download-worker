@@ -3,13 +3,14 @@ import path from "node:path";
 import { prepareCreativeInputs } from "./creative.js";
 import { foregroundGeometry, sourceSettings } from "./framing.js";
 import { smoothFaceTrack, cameraAt, trackedForegroundGeometry } from "./face-tracking-core.js";
-import { sourcePlaneRects } from "./director-layout.js";
+import { sourcePlaneRects, directorLayoutFilter, renameGraph } from "./director-layout.js";
 
 export function foregroundRect({ layout, width, height, sw, sh, source, edit, preparedSource, cameraPoints }, at) {
   let settings = preparedSource || sourceSettings(source), cursor = 0;
   for (const segment of edit?.segments || []) {
-    cursor += (segment.srcEnd - segment.srcStart) / (segment.speed ?? 1);
-    if (at < cursor) {
+    const start = edit.version === 2 ? segment.outputStart : cursor;
+    cursor = start + (segment.srcEnd - segment.srcStart) / (segment.speed ?? 1);
+    if (at >= start && at < cursor) {
       if (segment.transform) settings = { ...settings, ...segment.transform,
         ...(settings.tracking ? { tracking: { ...settings.tracking, enabled: false } } : {}) };
       break;
@@ -70,10 +71,17 @@ export async function prepareStackedCreative(options, resolver) {
   const escaped = commandFile.replaceAll("\\", "\\\\").replaceAll("'", "'\\''").replaceAll(":", "\\:");
   const commandFilter = commands.length ? `sendcmd=f='${escaped}',` : "";
   const maskDuration = options.previewAt === undefined ? options.duration : 1;
+  const affineSource = options.source?.affine || options.sourceEdit?.segments.some(s => s.transform?.affine);
+  const mask = affineSource
+    ? `color=c=white:s=${options.sourceWidth}x${options.sourceHeight}:r=30:d=${maskDuration}[affinemaskinput];` +
+      renameGraph(directorLayoutFilter({ ...options.style, videoFilter: {} }, options.width, options.height,
+        options.sourceWidth, options.sourceHeight, options.source, options.sourceEdit, options.previewAt, true),
+      "mask", "affinemaskinput", "affinemaskoutput") + ";[affinemaskoutput]format=gray[sourceplanemask]"
+    : `color=c=black:s=${options.width}x${options.height}:r=30:d=${maskDuration},format=gray,${commandFilter}${first.map((rect, i) =>
+        `drawbox@sourceplane${i}=x=${rect.x}:y=${rect.y}:w=${rect.w}:h=${rect.h}:color=white:t=fill`).join(",")}[sourceplanemask]`;
   return { ...above,
     filters: ["[base]split=2[lowerbase][originalforeground]", ...under.filters.map(rename),
-      `color=c=black:s=${options.width}x${options.height}:r=30:d=${maskDuration},format=gray,${commandFilter}${first.map((rect, i) =>
-        `drawbox@sourceplane${i}=x=${rect.x}:y=${rect.y}:w=${rect.w}:h=${rect.h}:color=white:t=fill`).join(",")}[sourceplanemask]`,
+      mask,
       "[originalforeground]format=rgba[foregroundrgba]",
       "[foregroundrgba][sourceplanemask]alphamerge[sharpsource]",
       `[${underLabel}][sharpsource]overlay=0:0[upperbase]`, ...above.filters],

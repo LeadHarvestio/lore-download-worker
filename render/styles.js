@@ -102,6 +102,7 @@ export const PRESETS = {
 import { sourceSettings } from "./framing.js";
 import { videoFilterSettings } from "./video-filters.js";
 import { validateDirectorLayout } from "./director-layout.js";
+import { validateAffineUsage } from "./affine-transform.js";
 // Keep catalog defaults compatible with older app schemas during worker-first
 // rollouts; the renderer still normalizes missing position values to center.
 for (const preset of Object.values(PRESETS)) {
@@ -114,6 +115,7 @@ PRESETS.boxed_red.caption = { ...baseCaption, wordsPerChunk: 1, yPct: 60,
   glow: { enabled: true, color: "#FFFFFF", sizePct: .65, blurPct: 2.2 } };
 
 export function resolveStyle(presetId, overrides = {}) {
+  validateAffineUsage(overrides);
   validateDirectorLayout(overrides);
   const base = PRESETS[presetId] || PRESETS.boxed_red;
   const result = deepMerge(structuredClone(base), overrides || {});

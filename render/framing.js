@@ -1,4 +1,5 @@
 import { sourceVideoFilter } from "./video-filters.js";
+import { affineTransformSchema, affineFilter } from "./affine-transform.js";
 import { faceTrackingSchema } from "./face-tracking-core.js";
 import { trackedLayoutFilter } from "./tracking-framing.js";
 // Keep source editing identical between style frames and finished MP4s.
@@ -6,6 +7,7 @@ export function sourceSettings(source = {}) {
   if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("source must be an object.");
   const result = { cropLeftPct: 0, cropRightPct: 0, cropTopPct: 0, cropBottomPct: 0, zoom: 1, muteAudio: false, xPct: 50, yPct: 50 };
   for (const key of Object.keys(source)) {
+    if (key === "affine") { result.affine = affineTransformSchema.parse(source.affine); continue; }
     if (key === "tracking") { result.tracking = faceTrackingSchema.parse(source.tracking); continue; }
     if (!Object.hasOwn(result, key)) throw new Error(`Unknown source setting: ${key}`);
     const value = source[key];
@@ -29,16 +31,16 @@ export function foregroundGeometry(sourceWidth, sourceHeight, width, height, sou
   return { croppedWidth, croppedHeight, width: even(croppedWidth * scale), height: even(croppedHeight * scale) };
 }
 
-export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, source = {}, videoFilter = {}, previewAt) {
+export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, source = {}, videoFilter = {}, previewAt, mask = false) {
   const settings = sourceSettings(source);
   if (settings.tracking?.enabled) return trackedLayoutFilter(layout, width, height, sourceWidth, sourceHeight, settings, videoFilter, previewAt);
   const look = sourceVideoFilter(videoFilter);
   if (layout === "fill") {
-    if (settings.zoom !== 1 || settings.cropLeftPct || settings.cropRightPct || settings.cropTopPct || settings.cropBottomPct) {
+    if (settings.affine || mask || settings.zoom !== 1 || settings.cropLeftPct || settings.cropRightPct || settings.cropTopPct || settings.cropBottomPct) {
       const geometry = foregroundGeometry(sourceWidth, sourceHeight, width, height, settings, "fill");
       const x = Math.floor(sourceWidth * settings.cropLeftPct / 100 / 2) * 2;
       const y = Math.floor(sourceHeight * settings.cropTopPct / 100 / 2) * 2;
-      return `color=c=black:s=${width}x${height}:r=30[canvas];[0:v]fps=30,crop=${geometry.croppedWidth}:${geometry.croppedHeight}:${x}:${y},${look}scale=${geometry.width}:${geometry.height},setsar=1[fg];[canvas][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2:shortest=1[base]`;
+      return `color=c=black:s=${width}x${height}:r=30[canvas];[0:v]fps=30,crop=${geometry.croppedWidth}:${geometry.croppedHeight}:${x}:${y},${look}scale=${geometry.width}:${geometry.height},setsar=1${affineFilter(settings.affine)}[fg];[canvas][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2:shortest=1[base]`;
     }
     if (settings.xPct === 50 && settings.yPct === 50) return `[0:v]fps=30,${look}scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[base]`;
     return `color=c=black:s=${width}x${height}:r=30[canvas];[0:v]fps=30,${look}scale=${width}:${height}:force_original_aspect_ratio=increase,setsar=1[fg];[canvas][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2:shortest=1[base]`;
@@ -46,10 +48,11 @@ export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, s
   const geometry = foregroundGeometry(sourceWidth, sourceHeight, width, height, settings);
   const cropped = ["cropLeftPct", "cropRightPct", "cropTopPct", "cropBottomPct"].some(key => settings[key] !== 0);
   const crop = cropped ? `crop=w=${geometry.croppedWidth}:h=${geometry.croppedHeight}:x=${Math.floor(sourceWidth * settings.cropLeftPct / 100 / 2) * 2}:y=${Math.floor(sourceHeight * settings.cropTopPct / 100 / 2) * 2},` : "";
+  if (mask) return `color=c=black:s=${width}x${height}:r=30[bg];[0:v]fps=30,${crop}scale=${geometry.width}:${geometry.height},setsar=1${affineFilter(settings.affine)}[fg];[bg][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2:shortest=1[base]`;
   return [
     `[0:v]fps=30,${crop}split=2[va][vb]`,
     `[va]scale=${even(width / 4)}:${even(height / 4)}:force_original_aspect_ratio=increase,crop=${even(width / 4)}:${even(height / 4)},boxblur=${Math.round(10 * width / 1080)}:6,eq=brightness=-0.12:saturation=1.1,scale=${width}:${height}[bg]`,
-    `[vb]${look}scale=${geometry.width}:${geometry.height},setsar=1[fg]`,
+    `[vb]${look}scale=${geometry.width}:${geometry.height},setsar=1${affineFilter(settings.affine)}[fg]`,
     `[bg][fg]overlay=x=W*${settings.xPct / 100}-w/2:y=H*${settings.yPct / 100}-h/2[base]`,
   ].join(";");
 }

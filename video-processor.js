@@ -9,8 +9,9 @@ import { fileURLToPath } from "url";
 import { processClip, resolveStyle, OUT_W, OUT_H } from "./render/process.js";
 import { censorWords, expletiveRanges } from "./render/censorship.js";
 import { sourceSettings } from "./render/framing.js";
-import { validateSourceEdit } from "./render/source-edit.js";
+import { validateSourceEdit, sourceEditDuration } from "./render/source-edit.js";
 import { voiceDuckingSchema } from "./render/voice-ducking.js";
+import { validateAffineUsage } from "./render/affine-transform.js";
 
 const execFileAsync = promisify(execFile);
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -220,7 +221,8 @@ async function transcribeVideo(clipPath) {
 
 import { validateDirectorLayout } from "./render/director-layout.js";
 
-export function validateStyleInput(presetId, overrides) {
+export function validateStyleInput(presetId, overrides, sourceEdit) {
+  validateAffineUsage(overrides, sourceEdit);
   if (presetId !== undefined && typeof presetId !== "string") throw new Error("stylePresetId must be a string.");
   if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
     throw new Error("styleOverrides must be an object.");
@@ -290,7 +292,7 @@ export async function processVideo({
   const probe = await probeVideo(clipPath);
   const editedSource = sourceEdit === undefined ? undefined : validateSourceEdit(sourceEdit, probe.durationSeconds);
   const captionDuration = editedSource
-    ? editedSource.segments.reduce((sum, segment) => sum + (segment.srcEnd - segment.srcStart) / segment.speed, 0)
+    ? sourceEditDuration(editedSource)
     : probe.durationSeconds;
   if (editedSource && !Array.isArray(providedWords)) throw new Error("Source edits require saved output-time captions; no automatic re-transcription is performed.");
   const normalizedHeadline = safeText(headline, 80) || "STREAMER CLIP";

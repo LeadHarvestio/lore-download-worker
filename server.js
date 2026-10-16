@@ -353,7 +353,7 @@ app.post("/api/process", auth, async function(req, res) {
     return res.status(400).json({ error: "stylePresetId must be one of: " + Object.keys(PRESETS).join(", ") });
   }
   const styleOverrides = body.styleOverrides === undefined || body.styleOverrides === null ? {} : body.styleOverrides;
-  try { validateStyleInput(stylePresetId, styleOverrides); } catch (error) {
+  try { validateStyleInput(stylePresetId, styleOverrides, req.body?.sourceEdit); } catch (error) {
     return res.status(400).json({ error: error.message });
   }
   if (body.words !== undefined && body.words !== null &&
@@ -439,7 +439,7 @@ app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { voiceDucking: 1, segmentPunchIn: 1, zoomEffect: 1, flashBlend: 2, sourcePanes: 1, trackedNameTags: 1, headlineVisibility: 1, signedMedia: 1, segmentPlacement: 1, layerStack: 1, headlineDigits: 1, colorProcessing: 2, soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, headlineCoverStyle: 1, sourceEdit: 1, thumbnails: API_KEY ? 1 : 0, temporalEditing: 1, faceTracking: faceTrackingReady() ? 1 : 0, trackingSpeed: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, flicker: 1, subscribeOverlays: 1, captionReference: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { affineTransforms: 1, sourceInstances: 2, voiceDucking: 1, segmentPunchIn: 1, zoomEffect: 1, flashBlend: 2, sourcePanes: 1, trackedNameTags: 1, headlineVisibility: 1, signedMedia: 1, segmentPlacement: 1, layerStack: 1, headlineDigits: 1, colorProcessing: 2, soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, headlineCoverStyle: 1, sourceEdit: 1, thumbnails: API_KEY ? 1 : 0, temporalEditing: 1, faceTracking: faceTrackingReady() ? 1 : 0, trackingSpeed: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, flicker: 1, subscribeOverlays: 1, captionReference: 1 } });
 });
 
 app.get("/api/styles/fonts/:id", auth, function(req, res) {
@@ -451,7 +451,7 @@ app.get("/api/styles/fonts/:id", auth, function(req, res) {
 app.post("/api/live-preview", auth, function(req, res) {
   try {
     const body = req.body || {};
-    validateStyleInput(body.stylePresetId, body.styleOverrides);
+    validateStyleInput(body.stylePresetId, body.styleOverrides, body.sourceEdit);
     if (typeof body.headline !== "string" || !body.headline.trim() || body.headline.length > 80) throw new Error("Provide a headline of up to 80 characters.");
     if (body.censorCaptions !== undefined && typeof body.censorCaptions !== "boolean") throw new Error("censorCaptions must be boolean.");
     if (body.highlightWords !== undefined && (!Array.isArray(body.highlightWords) || body.highlightWords.length > 10 || body.highlightWords.some(w => typeof w !== "string" || w.length > 60))) throw new Error("Invalid headline highlights.");
@@ -466,7 +466,7 @@ app.post("/api/live-preview", auth, function(req, res) {
 // Synchronous one-frame PNG of a style, for the Review page live preview.
 app.post("/api/preview", auth, async function(req, res) {
   const body = req.body || {};
-  try { validateStyleInput(body.stylePresetId, body.styleOverrides); }
+  try { validateStyleInput(body.stylePresetId, body.styleOverrides, body.sourceEdit); }
   catch (error) { return res.status(400).json({ error: String(error.message).slice(0, 250) }); }
   if (body.censorCaptions !== undefined && typeof body.censorCaptions !== "boolean") return res.status(400).json({ error: "censorCaptions must be a boolean." });
   const workDir = path.join(os.tmpdir(), "preview-" + crypto.randomUUID());

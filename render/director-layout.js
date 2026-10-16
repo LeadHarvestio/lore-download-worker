@@ -8,6 +8,8 @@ import { trackExpression } from "./tracking-framing.js";
 import { segmentFramingFilter } from "./segment-framing.js";
 import { segmentAtOutput } from "./source-timing.js";
 import { zoomExpression, validateMotionEffects } from "./motion-effects.js";
+import { affineFilter } from "./affine-transform.js";
+import { layoutFilter } from "./framing.js";
 
 export function validateDirectorLayout(style = {}) {
   validateMotionEffects(style);
@@ -56,7 +58,7 @@ export function renameGraph(graph, prefix, input, output) {
     label === "0:v" ? `[${input}]` : label === "base" ? `[${output}]` : `[${prefix}_${label}]`);
 }
 
-function paneFilter(layout, width, height, sw, sh, settings, look, at, origin = 0, effects = [], single = false, edit) {
+function paneFilter(layout, width, height, sw, sh, settings, look, at, origin = 0, effects = [], single = false, edit, mask = false) {
   const geometry = directorForegroundGeometry(sw, sh, width, height, layout, settings, [], at ?? 0);
   const { cropWidth: cw, cropHeight: ch, cropX: cx, cropY: cy, foregroundWidth: fw, foregroundHeight: fh } = geometry;
   const time = at === undefined ? `(t+${origin})` : String(at);
@@ -66,8 +68,8 @@ function paneFilter(layout, width, height, sw, sh, settings, look, at, origin = 
   const baseZoom = Math.max(settings.zoom ?? 1, tracking?.enabled ? tracking.zoom : 1);
   let punch = "1", cursor = 0;
   for (const segment of edit?.segments || []) {
-    const start = cursor;
-    cursor += (segment.srcEnd-segment.srcStart)/(segment.speed ?? 1);
+    const start = edit.version === 2 ? segment.outputStart : cursor;
+    cursor = start + (segment.srcEnd-segment.srcStart)/(segment.speed ?? 1);
     if (segment.punchScale !== undefined) punch = `if(gte(${time},${start})*lt(${time},${cursor}),${Math.min(3,baseZoom*segment.punchScale)/baseZoom},${punch})`;
   }
   const pw = `max(2,round(${fw}*(${punch})/2)*2)`, ph = `max(2,round(${fh}*(${punch})/2)*2)`;
@@ -86,7 +88,7 @@ function paneFilter(layout, width, height, sw, sh, settings, look, at, origin = 
     ax = `if(${active},${e.anchor.x},${ax})`; ay = `if(${active},${e.anchor.y},${ay})`;
   }
   const crop = `crop=${cw}:${ch}:${cx}:${cy}`;
-  const background = layout === "blurfit"
+  const background = layout === "blurfit" && !mask
     ? (() => {
       if (single) return `[bginput]scale=${Math.round(width/8)*2}:${Math.round(height/8)*2}:force_original_aspect_ratio=increase,` +
         `crop=${Math.round(width/8)*2}:${Math.round(height/8)*2},boxblur=${Math.round(10*width/1080)}:6,` +
@@ -98,16 +100,21 @@ function paneFilter(layout, width, height, sw, sh, settings, look, at, origin = 
         `gblur=sigma=${10 * width / 1080},eq=brightness=-0.12:saturation=1.1[panebg]`;
     })()
     : `color=black:s=${width}x${height}:r=30[panebg]`;
-  return `[0:v]fps=30,${crop}${layout === "blurfit" ? ",split=2[fginput][bginput]" : "[fginput]"};${background};` +
-    `[fginput]${sourceVideoFilter(look)}scale=w='max(2,trunc((${pw})*(${scale})/2)*2)':h='max(2,trunc((${ph})*(${scale})/2)*2)':eval=frame,setsar=1[panefg];` +
-    `[panebg][panefg]overlay=x='(${x})-(w-(${pw}))*(${ax})':y='(${y})-(h-(${ph}))*(${ay})':eval=frame:shortest=1[base]`;
+  const overlayPosition = settings.affine
+    ? `x='(${x})-(max(2,trunc((${pw})*(${scale})/2)*2)-(${pw}))*(${ax})+max(2,trunc((${pw})*(${scale})/2)*2)/2-w/2':y='(${y})-(max(2,trunc((${ph})*(${scale})/2)*2)-(${ph}))*(${ay})+max(2,trunc((${ph})*(${scale})/2)*2)/2-h/2'`
+    : `x='(${x})-(w-(${pw}))*(${ax})':y='(${y})-(h-(${ph}))*(${ay})'`;
+  return `[0:v]fps=30,${crop}${layout === "blurfit" && !mask ? ",split=2[fginput][bginput]" : "[fginput]"};${background};` +
+    `[fginput]${sourceVideoFilter(look)}scale=w='max(2,trunc((${pw})*(${scale})/2)*2)':h='max(2,trunc((${ph})*(${scale})/2)*2)':eval=frame,setsar=1${affineFilter(settings.affine)}[panefg];` +
+    `[panebg][panefg]overlay=${overlayPosition}:eval=frame:shortest=1[base]`;
 }
 
-export function directorLayoutFilter(style, width, height, sw, sh, source, edit, at) {
+export function directorLayoutFilter(style, width, height, sw, sh, source, edit, at, mask = false) {
   const motion = style.effects?.some(e => e.type === "zoom") || edit?.segments.some(s => s.punchScale !== undefined);
   const frame = (layout, w, h, sw, sh, settings, look, at, origin) =>
-    paneFilter(layout, w, h, sw, sh, settings, look, at, origin, style.effects || [], !style.sourcePanes, edit);
-  if (!style.sourcePanes) return segmentFramingFilter(style.layout, width, height, sw, sh, source, style.videoFilter, edit, at, motion ? frame : undefined, !!motion);
+    paneFilter(layout, w, h, sw, sh, settings, look, at, origin, style.effects || [], !style.sourcePanes, edit, mask);
+  if (!style.sourcePanes) return segmentFramingFilter(style.layout, width, height, sw, sh, source, style.videoFilter, edit, at,
+    motion ? frame : mask ? (layout, w, h, sw, sh, settings, look, at) =>
+      layoutFilter(layout, w, h, sw, sh, settings, look, at, true) : undefined, !!motion);
   const panes = paneDefinitions({ ...style, source }, height);
   const filters = ["[0:v]split=2[topinput][bottominput]"];
   for (const pane of panes) {

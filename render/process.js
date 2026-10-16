@@ -16,6 +16,7 @@ import { prepareCreativeInputs } from "./creative.js";
 import { prepareSoundEffects } from "./sound-effects.js";
 import { directorLayoutFilter, validateDirectorLayout } from "./director-layout.js";
 import { prepareNameTags } from "./name-tags.js";
+import { validateAffineUsage } from "./affine-transform.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
@@ -69,14 +70,15 @@ export async function processClip(p) {
   let info = await probe(p.inputPath);
   if (p.sourceEdit !== undefined) {
     const sourceEdit = validateSourceEdit(p.sourceEdit, info.duration);
-    const timingOnly = { segments: sourceEdit.segments.map(({ srcStart, srcEnd, speed }) => ({ srcStart, srcEnd, speed })) };
-    const edited = await cache.acquire("source-edit-clock-v2", { original: await fileFingerprint(p.inputPath), sourceEdit: timingOnly }, "mp4",
+    const timingOnly = { ...(sourceEdit.version ? { version: sourceEdit.version } : {}), segments: sourceEdit.segments.map(({ srcStart, srcEnd, speed, instanceId, outputStart }) => ({ srcStart, srcEnd, speed, ...(sourceEdit.version === 2 ? { instanceId, outputStart } : {}) })) };
+    const edited = await cache.acquire("source-instances-clock-v3", { original: await fileFingerprint(p.inputPath), sourceEdit: timingOnly }, "mp4",
       dest => encodeSourceEdit(p.inputPath, dest, sourceEdit, info.hasAudio, deadline));
     leases.push(edited);
     p = { ...p, inputPath: edited.file };
     info = { ...await probe(p.inputPath), duration: sourceEditDuration(sourceEdit) };
   }
   const style = p.style;
+  validateAffineUsage(style, p.sourceEdit);
   validateDirectorLayout(style);
   const source = sourceSettings(style.source);
   const preview = typeof p.previewAt === "number";

@@ -10,7 +10,7 @@ export function livePreviewRecipe({ headline, highlightWords = [], words, styleP
   const image = renderHeadlinePng({ text: headline, highlight: highlightWords, width, height, style: style.headline });
   const raw = (words || []).map(w => ({ ...w, word: w.word ?? w.text, start: w.start, end: w.end }));
   return {
-    width, height,
+    width, height, affineTransforms: 1,
     headline: { image: `data:image/png;base64,${image.buffer.toString("base64")}`, width: image.width, height: image.height, visibleBox: image.visibleBox },
     caption: { font: style.caption.font, family: FONTS[style.caption.font]?.family || "Archivo Black",
       cues: buildCaptionCues({ words: censorCaptions ? censorWords(raw) : raw, width, style: style.caption }) },
