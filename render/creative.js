@@ -8,6 +8,8 @@ import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { sourceVideoFilter } from "./video-filters.js";
 import { affineFilter } from "./affine-transform.js";
 import { flashOpacity } from "./director-motion.js";
+import { isFlashV2 } from "./flash.js";
+import { buildSmoothFlashFilters } from "./flash-filter.js";
 
 const ROOT = path.resolve("uploads", "context-assets");
 const UUID = /^[a-f0-9-]{36}$/;
@@ -189,7 +191,8 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
   // Canvas composites regular flicker before the new blended flash pass.
   // Keep the legacy order byte-for-byte when no blended flash was authored.
   const blendedFlash = e => e.type === "flash" && (e.blend !== undefined || e.envelope !== undefined);
-  const orderedEffects = [...effects.filter(e => !blendedFlash(e)), ...effects.filter(blendedFlash)];
+  const legacyEffects = effects.filter(e => !isFlashV2(e));
+  const orderedEffects = [...legacyEffects.filter(e => !blendedFlash(e)), ...legacyEffects.filter(blendedFlash)];
   for (const [n, effect] of orderedEffects.entries()) {
     if (effect.type === "shake" || effect.type === "zoom") continue;
     if (!Number.isFinite(effect.startSeconds) || !Number.isFinite(effect.endSeconds) || effect.endSeconds <= effect.startSeconds) throw new Error("Invalid effect interval.");
@@ -242,5 +245,8 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
     } else throw new Error("Unsupported video effect.");
     current = output;
   }
+  const smooth = buildSmoothFlashFilters(current, "smoothflashout", effects.filter(isFlashV2), width, height, offset);
+  filters.push(...smooth.filters);
+  current = smooth.label;
   return { filters, label: current, nextIndex: index, audioFilters, audioLabels };
 }

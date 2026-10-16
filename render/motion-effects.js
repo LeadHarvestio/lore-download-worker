@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { motionEffectFields, validMotionFields } from "./director-motion.js";
+import { flashFields, validFlashFields } from "./flash.js";
 
 const time = () => z.number().finite().min(0).max(1800);
 const unit = () => z.number().finite().min(0).max(1);
@@ -13,7 +14,8 @@ export const effectSchema = z.object({
   speedHz: z.number().finite().min(.1).max(2).optional(),
   amount: z.number().finite().min(0).max(.08).optional(), glow: unit().optional(),
   ...motionEffectFields,
-}).strict().refine(e => e.endSeconds > e.startSeconds).refine(validMotionFields);
+  ...flashFields,
+}).strict().refine(e => e.endSeconds > e.startSeconds).refine(validMotionFields).refine(validFlashFields);
 
 export function validateMotionEffects(style = {}) {
   if (style.effects !== undefined) z.array(effectSchema).max(30).parse(style.effects);
