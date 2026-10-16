@@ -55,7 +55,8 @@ test("authenticated assembled queue and preview retain output-time panes and cre
     const catalog = await (await fetch(root + "/api/styles", { headers })).json();
     assert.equal(catalog.capabilities.sourcePanes, 1);
     assert.equal(catalog.capabilities.trackedNameTags, 1);
-    for (const flag of ["segmentPunchIn", "zoomEffect", "flashBlend"]) assert.equal(catalog.capabilities[flag], 1);
+    for (const flag of ["segmentPunchIn", "zoomEffect"]) assert.equal(catalog.capabilities[flag], 1);
+    assert.equal(catalog.capabilities.flashBlend, 2);
     assert.equal(catalog.capabilities.faceTracking, 0, "rendering cached face selection must not start analysis");
     for (const styleOverrides of [
       { ...body.styleOverrides, nameTags: [{ ...body.styleOverrides.nameTags[0], endSeconds: 3.3 }] },
