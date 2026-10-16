@@ -2,7 +2,8 @@
 import { z } from "zod";
 const flashFields = {
   flashVersion: z.literal(2).optional(),
-  fps: z.number().finite().min(1).max(120).optional(),
+  // Source canonical rates / projected rates can differ by a 16x speed ratio.
+  fps: z.number().finite().min(1 / 16).max(1920).optional(),
   rampInFrames: z.number().int().min(2).max(3600).optional(),
   holdFrames: z.number().int().min(0).max(7200).optional(),
   rampOutFrames: z.number().int().min(2).max(3600).optional(),
@@ -23,7 +24,7 @@ function validFlashFields(e) {
   return e.type === "flash" && e.flashVersion === 2 && extraKeys.slice(0, 5).every((key) => e[key] !== void 0) && /^#[0-9a-fA-F]{6}$/.test(String(e.color)) && e.envelope === void 0 && (e.blend === void 0 || e.blend === "screen");
 }
 function createFlash(startSeconds, polarity = "positive", style = "pulse", fps = 30) {
-  if (!Number.isFinite(startSeconds) || startSeconds < 0 || !Number.isFinite(fps) || fps < 1 || fps > 120)
+  if (!Number.isFinite(startSeconds) || startSeconds < 0 || !Number.isFinite(fps) || fps < 1 / 16 || fps > 1920)
     throw new Error("Flash start/fps is outside the supported range.");
   const preset = FLASH_PRESETS[style];
   return {
@@ -47,6 +48,13 @@ function flashEnvelopeAt(e, at) {
   return u < 0 ? 0 : u < a ? smoothstep(u / a) : u < a + h ? 1 : u < a + h + o ? smoothstep(1 - (u - a - h) / o) : 0;
 }
 const flashOpacityAt = (e, at) => e.peakOpacity * flashEnvelopeAt(e, at);
+function moveFlashTo(e, desiredStart, duration) {
+  const span = e.endSeconds - e.startSeconds;
+  if (!Number.isFinite(desiredStart) || !Number.isFinite(duration) || span > duration || duration <= 0)
+    throw new Error("The flash window does not fit in this clip.");
+  const startSeconds = Math.max(0, Math.min(duration - span, desiredStart));
+  return { ...e, startSeconds, endSeconds: startSeconds + span };
+}
 function combinedFlashRGB(effects, at) {
   const result = [0, 0, 0];
   for (const e of effects) {
@@ -124,6 +132,7 @@ export {
   flashOpacityAt,
   flashProposalEffect,
   isFlashV2,
+  moveFlashTo,
   projectFlashWindow,
   proposeFlashes,
   screenFlashPixel,
