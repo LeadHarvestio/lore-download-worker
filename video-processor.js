@@ -217,12 +217,15 @@ async function transcribeVideo(clipPath) {
   return data.words;
 }
 
+import { validateDirectorLayout } from "./render/director-layout.js";
+
 export function validateStyleInput(presetId, overrides) {
   if (presetId !== undefined && typeof presetId !== "string") throw new Error("stylePresetId must be a string.");
   if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
     throw new Error("styleOverrides must be an object.");
   }
   if (overrides?.source !== undefined) sourceSettings(overrides.source);
+  validateDirectorLayout(overrides);
 }
 
 export function toRenderWords(words) {

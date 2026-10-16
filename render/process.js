@@ -14,6 +14,8 @@ import { prepareStackedCreative } from "./stacked-creative.js";
 import { createRenderCache, fileFingerprint, contentFingerprint } from "./cache.js";
 import { prepareCreativeInputs } from "./creative.js";
 import { prepareSoundEffects } from "./sound-effects.js";
+import { directorLayoutFilter, validateDirectorLayout } from "./director-layout.js";
+import { prepareNameTags } from "./name-tags.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
@@ -75,6 +77,7 @@ export async function processClip(p) {
     info = await probe(p.inputPath);
   }
   const style = p.style;
+  validateDirectorLayout(style);
   const source = sourceSettings(style.source);
   const preview = typeof p.previewAt === "number";
   const width = preview ? PREVIEW_W : OUT_W;
@@ -124,9 +127,9 @@ export async function processClip(p) {
   let backgroundPath = p.inputPath;
   if (!preview) {
     const { muteAudio, ...geometry } = source;
-    const background = await cache.acquire("background-1080p-segments-v2", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, source: geometry, videoFilter: style.videoFilter, segmentPlacement: p.sourceEdit }, "mp4", async dest => {
+    const background = await cache.acquire("background-1080p-panes-v1", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, sourcePanes: style.sourcePanes, source: geometry, videoFilter: style.videoFilter, segmentPlacement: p.sourceEdit }, "mp4", async dest => {
       const framingScript = path.join(p.workDir, "source-framing.txt");
-      fs.writeFileSync(framingScript, segmentFramingFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.sourceEdit));
+      fs.writeFileSync(framingScript, directorLayoutFilter(style, width, height, info.width, info.height, source, p.sourceEdit));
       await run(process.env.FFMPEG_BIN || "ffmpeg", [
         "-y", "-hide_banner", "-loglevel", "error", "-threads", "2", "-filter_complex_threads", "1", "-i", p.inputPath,
         "-filter_complex_script", framingScript,
@@ -151,11 +154,14 @@ export async function processClip(p) {
     previewAt: preview ? p.previewAt : undefined, originalPath: p.inputPath, originalIndex: preview ? 0 : undefined });
   const sounds = await prepareSoundEffects({ effects: style.soundEffects, args, nextIndex: creative.nextIndex,
     duration: info.duration, preview });
+  const tags = prepareNameTags({ style, args, nextIndex: sounds.nextIndex, width, height, sw: info.width, sh: info.height,
+    edit: p.sourceEdit, duration: info.duration, workDir: p.workDir, at: preview ? p.previewAt : undefined, label: creative.label });
   const f = [
-    preview ? segmentFramingFilter(style.layout, width, height, info.width, info.height, source, style.videoFilter, p.sourceEdit, p.previewAt) : "[0:v]setsar=1[base]",
+    preview ? directorLayoutFilter(style, width, height, info.width, info.height, source, p.sourceEdit, p.previewAt) : "[0:v]setsar=1[base]",
     ...creative.filters,
+    ...tags.filters,
     `[1:v]format=rgba[hl]`,
-    `[${creative.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
+    `[${tags.label}][hl]overlay=x=${style.headline.coverBox ? Math.max(0, Math.min(width - hl.width, width * style.headline.coverBox.xPct / 100 - hl.width / 2)) : "(W-w)/2"}:y=${yTop}${enable}[withhl]`,
     `[withhl]ass='${esc(assPath)}':fontsdir='${esc(FONT_DIR)}',format=yuv420p[outv]`,
   ];
 
