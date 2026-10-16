@@ -3,6 +3,7 @@ import path from "node:path";
 import { prepareCreativeInputs } from "./creative.js";
 import { foregroundGeometry, sourceSettings } from "./framing.js";
 import { smoothFaceTrack, cameraAt, trackedForegroundGeometry } from "./face-tracking-core.js";
+import { sourcePlaneRects } from "./director-layout.js";
 
 export function foregroundRect({ layout, width, height, sw, sh, source, edit, preparedSource, cameraPoints }, at) {
   let settings = preparedSource || sourceSettings(source), cursor = 0;
@@ -52,12 +53,16 @@ export async function prepareStackedCreative(options, resolver) {
     sw: options.sourceWidth, sh: options.sourceHeight, source: options.source, edit: options.sourceEdit,
     preparedSource: sourceSettings(options.source),
     cameraPoints: options.source?.tracking?.enabled ? smoothFaceTrack(options.source.tracking, Math.max(options.source.tracking.endSeconds, ...options.source.tracking.track.map(point => point.t), .1)) : undefined };
-  const first = foregroundRect(geometry, options.previewAt ?? 0);
+  const rectsAt = at => options.style.sourcePanes || options.style.effects?.some(e => e.type === "zoom") || options.sourceEdit?.segments.some(s => s.punchScale !== undefined)
+    ? sourcePlaneRects(options.style, options.sourceWidth, options.sourceHeight, options.width, options.height, options.sourceEdit, at)
+      .map(rect => rect.w && rect.h ? rect : { x: -10000, y: -10000, w: 1, h: 1 })
+    : [foregroundRect(geometry, at)];
+  const first = rectsAt(options.previewAt ?? 0);
   const commands = [];
   if (options.previewAt === undefined) {
     for (let frame = 1; frame < Math.ceil(options.duration * 30); frame++) {
-      const at = frame / 30, rect = foregroundRect(geometry, at);
-      commands.push(`${at.toFixed(6)} drawbox@sourceplane x ${rect.x}, drawbox@sourceplane y ${rect.y}, drawbox@sourceplane w ${rect.w}, drawbox@sourceplane h ${rect.h};`);
+      const at = frame / 30;
+      rectsAt(at).forEach((rect, i) => commands.push(`${(Math.floor(at*1e6)/1e6).toFixed(6)} drawbox@sourceplane${i} x ${rect.x}, drawbox@sourceplane${i} y ${rect.y}, drawbox@sourceplane${i} w ${rect.w}, drawbox@sourceplane${i} h ${rect.h};`));
     }
   }
   const commandFile = path.join(options.workDir, "source-plane-commands.txt");
@@ -67,7 +72,8 @@ export async function prepareStackedCreative(options, resolver) {
   const maskDuration = options.previewAt === undefined ? options.duration : 1;
   return { ...above,
     filters: ["[base]split=2[lowerbase][originalforeground]", ...under.filters.map(rename),
-      `color=c=black:s=${options.width}x${options.height}:r=30:d=${maskDuration},format=gray,${commandFilter}drawbox@sourceplane=x=${first.x}:y=${first.y}:w=${first.w}:h=${first.h}:color=white:t=fill[sourceplanemask]`,
+      `color=c=black:s=${options.width}x${options.height}:r=30:d=${maskDuration},format=gray,${commandFilter}${first.map((rect, i) =>
+        `drawbox@sourceplane${i}=x=${rect.x}:y=${rect.y}:w=${rect.w}:h=${rect.h}:color=white:t=fill`).join(",")}[sourceplanemask]`,
       "[originalforeground]format=rgba[foregroundrgba]",
       "[foregroundrgba][sourceplanemask]alphamerge[sharpsource]",
       `[${underLabel}][sharpsource]overlay=0:0[upperbase]`, ...above.filters],
