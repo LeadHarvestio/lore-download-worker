@@ -16,6 +16,7 @@ import { prepareCreativeInputs } from "./creative.js";
 import { prepareSoundEffects } from "./sound-effects.js";
 import { directorLayoutFilter, validateDirectorLayout } from "./director-layout.js";
 import { prepareNameTags } from "./name-tags.js";
+import { validateAffineUsage } from "./affine-transform.js";
 
 const run = promisify(execFile);
 const cache = createRenderCache();
@@ -77,6 +78,7 @@ export async function processClip(p) {
     info = { ...await probe(p.inputPath), duration: sourceEditDuration(sourceEdit) };
   }
   const style = p.style;
+  validateAffineUsage(style, p.sourceEdit);
   validateDirectorLayout(style);
   const source = sourceSettings(style.source);
   const preview = typeof p.previewAt === "number";

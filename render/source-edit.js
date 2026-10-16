@@ -1,6 +1,7 @@
 // Worker source-cut clock, preserving the deployed per-segment motion contract.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { affineTransformSchema } from "./affine-transform.js";
 const run = promisify(execFile);
 export function validateSourceEdit(value, duration = 1800) {
   const fail = message => { throw Object.assign(new Error(message), { status: 400 }); };
@@ -14,8 +15,9 @@ export function validateSourceEdit(value, duration = 1800) {
     previousEnd = srcEnd; outputDuration += (srcEnd - srcStart) / speed;
     const transform = segment.transform;
     if (transform !== undefined && (!transform || typeof transform !== "object" || Array.isArray(transform) ||
-      Object.keys(transform).some(key => !["xPct", "yPct", "zoom", "cropLeftPct", "cropRightPct", "cropTopPct", "cropBottomPct"].includes(key)) ||
-      Object.entries(transform).some(([key, value]) => !Number.isFinite(value) || value < (key === "zoom" ? 1 : 0) || value > (key === "zoom" ? 3 : key.startsWith("crop") ? 40 : 100)))) fail("Invalid segment placement.");
+      Object.keys(transform).some(key => !["affine", "xPct", "yPct", "zoom", "cropLeftPct", "cropRightPct", "cropTopPct", "cropBottomPct"].includes(key)) ||
+      Object.entries(transform).some(([key, value]) => key !== "affine" && (!Number.isFinite(value) || value < (key === "zoom" ? 1 : 0) || value > (key === "zoom" ? 3 : key.startsWith("crop") ? 40 : 100))))) fail("Invalid segment placement.");
+    if (transform?.affine !== undefined) affineTransformSchema.parse(transform.affine);
     if (segment.punchScale !== undefined && (!Number.isFinite(segment.punchScale) || segment.punchScale < 1 || segment.punchScale > 1.15)) fail("Invalid segment punch-in scale.");
     return { srcStart, srcEnd, speed, ...(transform ? { transform: { ...transform } } : {}),
       ...(segment.punchScale !== undefined ? { punchScale: segment.punchScale } : {}) };

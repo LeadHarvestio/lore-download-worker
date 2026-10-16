@@ -11,6 +11,7 @@ import { censorWords, expletiveRanges } from "./render/censorship.js";
 import { sourceSettings } from "./render/framing.js";
 import { validateSourceEdit } from "./render/source-edit.js";
 import { voiceDuckingSchema } from "./render/voice-ducking.js";
+import { validateAffineUsage } from "./render/affine-transform.js";
 
 const execFileAsync = promisify(execFile);
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -220,7 +221,8 @@ async function transcribeVideo(clipPath) {
 
 import { validateDirectorLayout } from "./render/director-layout.js";
 
-export function validateStyleInput(presetId, overrides) {
+export function validateStyleInput(presetId, overrides, sourceEdit) {
+  validateAffineUsage(overrides, sourceEdit);
   if (presetId !== undefined && typeof presetId !== "string") throw new Error("stylePresetId must be a string.");
   if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
     throw new Error("styleOverrides must be an object.");

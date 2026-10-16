@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { lookup } from "node:dns/promises";
 import { createCanvas, loadImage } from "@napi-rs/canvas";
 import { sourceVideoFilter } from "./video-filters.js";
+import { affineFilter } from "./affine-transform.js";
 import { flashOpacity } from "./director-motion.js";
 
 const ROOT = path.resolve("uploads", "context-assets");
@@ -110,7 +111,11 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
         !Number.isFinite(layer.startSeconds) || !Number.isFinite(layer.endSeconds) || layer.endSeconds <= layer.startSeconds) throw new Error("Invalid timed context layer.");
     if (previewAt !== undefined && (previewAt < layer.startSeconds || previewAt >= layer.endSeconds)) continue;
     let file = await resolver(layer);
-    const targetWidth = Math.max(2, Math.round(width * layer.widthPct / 100));
+    let targetWidth = Math.max(2, Math.round(width * layer.widthPct / 100));
+    if (layer.affine && layer.kind === "cutout" && layer.glow?.enabled) {
+      const image = await loadImage(file);
+      targetWidth = Math.max(2, Math.round(Math.min(targetWidth, height * layer.heightPct / 100 * image.width / image.height)));
+    }
     if (layer.kind === "cutout") file = await edgedCutout(file, targetWidth, layer.glow);
     if (layer.kind !== "video") args.push("-loop", "1", "-t", String(layer.endSeconds - layer.startSeconds), "-i", file);
     else {
@@ -138,13 +143,18 @@ export async function prepareCreativeInputs({ style, args, nextIndex, width, hei
       : l.kind === "cutout"
       ? entry.edged ? "" : `scale=${w}:-1,`
       : `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},`;
+    // Versioned affine overlays use the same contain fit as the browser, for
+    // images, cutouts and video alike. Legacy recipes retain their old fit.
+    if (l.affine) size = entry.edged ? "" : `scale=${w}:${h}:force_original_aspect_ratio=decrease,`;
+    if (l.affine) size += affineFilter(l.affine).slice(1) + ",";
     const elapsed = previewAt === undefined ? 0 : previewAt - l.startSeconds;
+    const entryDuration = .15;
     let animation = "";
     if (l.enterAnimation === "fade") animation = previewAt === undefined
-      ? `fade=t=in:st=0:d=0.15:alpha=1,`
-      : `colorchannelmixer=aa=${Math.min(1, elapsed / .15)},`;
+      ? `fade=t=in:st=0:d=${entryDuration}:alpha=1,`
+      : `colorchannelmixer=aa=${Math.min(1, elapsed / entryDuration)},`;
     if (l.enterAnimation === "pop") {
-      const factor = previewAt === undefined ? "(.82+.18*min(t/0.15\\,1))" : String(.82 + .18 * Math.min(elapsed / .15, 1));
+      const factor = previewAt === undefined ? `(.82+.18*min(t/${entryDuration}\\,1))` : String(.82 + .18 * Math.min(elapsed / entryDuration, 1));
       animation = `scale=w='iw*${factor}':h='ih*${factor}':eval=frame,`;
     }
     filters.push(`[${input}:v]${size}format=rgba,${animation}setpts=PTS-STARTPTS+${start}/TB[${label}]`);
