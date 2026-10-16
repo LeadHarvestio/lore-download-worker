@@ -5,6 +5,8 @@ contract with LeadHarvestio/lore-download-worker. Live support remains gated by
 `capabilities.sourceInstances === 2`; existing `sourceEdit: 1` is not sufficient.
 No paid jobs or saved clips are processed automatically.
 
+Prepared review PR: https://github.com/LeadHarvestio/lore-download-worker/pull/40
+
 The prepared worker branch includes the still-unmerged affine/rotation update
 (worker PR #38). The source-instance modules were regenerated against that branch
 to preserve rotation and independent axis sizing rather than overwrite them.
@@ -73,9 +75,10 @@ The prepared combined checkout passed this mode at 1080×1920, including decoded
 shot order, repeated-shot placement, source audio, and black/silent gaps. Legacy
 source-cut HTTP/clock tests and the affine HTTP contract also passed.
 
-**After approval**, regenerate against the current worker branch; resolve any
-reported drift rather than overwriting a newer transform contract. Copy the two
-generated source modules and the transformed worker modules into that branch,
-run the same acceptance against the checkout without the loader, and open a
-separate worker PR. Do not deploy, enable the capability in an older worker, or
-change production plans without the creator's approval.
+Before an approved rollout, check for changes to worker main and resolve any
+reported drift rather than overwriting a newer transform contract. Re-run the
+assembled acceptance after any reconciliation. Publish the app-side render guard
+first, then merge/deploy the reviewed worker only with the creator's approval and
+when the worker is idle. Verify the live sourceInstances: 2 and affineTransforms: 1
+capabilities before retrying authored instance edits. Do not enable capabilities
+manually in an older worker or change production plans without approval.
