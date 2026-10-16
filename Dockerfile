@@ -30,6 +30,17 @@ RUN curl --fail --location --retry 2 \
     -o /app/render/yunet.onnx && \
     echo "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4  /app/render/yunet.onnx" | sha256sum -c - && \
     /opt/whisper-venv/bin/python3 /app/render/analyze-faces.py --check
+
+# Staging-only identity candidate; default analyzer remains unchanged.
+RUN curl --fail --location --retry 2 \
+    https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec_int8.onnx \
+    -o /app/render/sface.onnx && \
+    echo "2b0e941e6f16cc048c20aee0c8e31f569118f65d702914540f7bfdc14048d78a  /app/render/sface.onnx" | sha256sum -c - && \
+    curl --fail --location --retry 2 \
+    https://raw.githubusercontent.com/opencv/opencv_zoo/main/models/face_recognition_sface/LICENSE \
+    -o /app/render/SFACE-LICENSE && \
+    echo "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  /app/render/SFACE-LICENSE" | sha256sum -c - && \
+    /opt/whisper-venv/bin/python3 /app/render/analyze-faces-candidate.py --check
 COPY fonts ./fonts
 COPY download ./download
 
