@@ -56,6 +56,25 @@ not whole-clip zero-error totals. Annotations and evidence generation are in
 `scripts/face-identity-reviewed-intervals.json` and
 `scripts/face-identity-interval-check.py` in the app repository.
 
+**The longer-occlusion gate still fails.** Controlled variants use four seconds
+of each real source with a fixed rectangle covering the union of the target's
+face positions for 1.5 seconds. This avoids a moving mask leaking the target's
+motion to optical flow. The target is visible at 0.4s, hidden for 0.5–2.0s, then
+visible again at 2.0s (a 1.6s observation gap at 10 fps).
+
+| Source interval | ID before / after occluder | Result |
+| --- | --- | --- |
+| car-parking 77–81s | face-v2-1 → face-v2-2 | Fragmented |
+| car-incident 20–24s | face-v2-2 → face-v2-4 | Fragmented |
+| two-person-argument 25.5–29.5s | face-v2-2 → face-v2-6 | Fragmented |
+
+These are controlled variants, not changes to user edits.
+`scripts/face-identity-occlusion-check.py` reproduces them and exits nonzero
+when the gate fails. The retained identity still exists at reveal time, but
+reacquisition rejects the changed geometry/appearance; retaining IDs longer
+alone is not the fix. The overall identity task remains open and this candidate
+must not be activated as certified speaker tracking.
+
 ## Worker file mapping
 
 The files under `render/` are the candidate source, kept here for audit and
@@ -97,6 +116,14 @@ No speaker capability is advertised. A result explicitly states
 
 ## Reproduce
 
+The HTTP harness additionally needs the worker's own Node dependencies
+(including `@napi-rs/canvas@0.1.65`) available for the offline test. It expects a
+current worker snapshot in `generated-artifacts/worker-rollout-verified` and its
+GitHub tree response in `generated-artifacts/face-identity-keyframe/worker-tree.json`.
+Fetch those through the installed GitHub integration. The harness checks source
+blob hashes before assembling a temporary server. Temporary offline dependencies
+were removed from the web-app manifests after verification.
+
 Models:
 
 - YuNet 2023mar SHA256:
@@ -123,6 +150,7 @@ node --test worker-updates/face-identity/face-analysis.test.mjs
   --appearance generated-artifacts/face-identity-v2/sface.onnx \
   --output generated-artifacts/face-identity-keyframe
 .pythonlibs/bin/python scripts/face-identity-interval-check.py
+.pythonlibs/bin/python scripts/face-identity-occlusion-check.py # currently fails; do not ignore
 node scripts/face-worker-queue-check.mjs
 npx tsx scripts/face-candidate-render-check.ts
 ```
@@ -141,7 +169,7 @@ verification, not signed-in UI verification or participant-identity proof.
 
 ## Before rollout
 
-1. Review the measured fixes and request separate merge/deployment approval.
+1. Fix the remaining controlled-occlusion failures before requesting activation.
    Default production analysis remains unchanged until candidate activation.
 2. Before speaker-follow, complete reviewed participant ground truth, crossings, scene boundaries and
    real/controlled 1.5-second occlusion cases on all three clips. Swaps,
