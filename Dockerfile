@@ -41,6 +41,13 @@ RUN curl --fail --location --retry 2 \
     -o /app/render/SFACE-LICENSE && \
     echo "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  /app/render/SFACE-LICENSE" | sha256sum -c - && \
     /opt/whisper-venv/bin/python3 /app/render/analyze-faces-candidate.py --check
+# Runtime has only CPU ONNX inference. Export-only Torch is removed in this layer.
+RUN /opt/whisper-venv/bin/pip install --no-cache-dir onnxruntime==1.31.0 python_speech_features==0.6 scipy==1.17.1 numpy==2.2.6 && \
+    /opt/whisper-venv/bin/pip install --no-cache-dir --target /tmp/speaker-export --index-url https://download.pytorch.org/whl/cpu torch==2.8.0+cpu && \
+    /opt/whisper-venv/bin/pip install --no-cache-dir --target /tmp/speaker-export onnx==1.17.0 && \
+    PYTHONPATH=/tmp/speaker-export /opt/whisper-venv/bin/python3 /app/render/export-speaker-model.py /app/render/light-asd.onnx && \
+    rm -rf /tmp/speaker-export
+ENV ACTIVE_SPEAKER_MODEL_PATH=/app/render/light-asd.onnx
 COPY fonts ./fonts
 COPY download ./download
 

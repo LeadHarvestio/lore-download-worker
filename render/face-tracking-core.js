@@ -37,7 +37,7 @@ function smoothFaceTrack(settings, duration, manual = { x: 0.5, y: 0.5 }) {
   const input = settings.track.filter((p) => p.confidence >= 0.5 && p.t <= duration);
   if (!input.length) return [{ t: 0, ...manual }, { t: duration, ...manual }];
   const result = [], step = Math.max(0.1, duration / 599);
-  let previous = { x: input[0].x + input[0].w / 2, y: input[0].y + input[0].h / 2 }, index = 0;
+  let previous = input[0].t <= 0 && settings.startSeconds <= 0 ? { x: input[0].x + input[0].w / 2, y: input[0].y + input[0].h / 2 } : { ...manual }, index = 0;
   const velocity = { x: 0, y: 0 };
   const dead = settings.deadZonePct / 100;
   const speed = clamp(settings.followSpeed ?? 1, 0.5, 2.5);
@@ -53,7 +53,7 @@ function smoothFaceTrack(settings, duration, manual = { x: 0.5, y: 0.5 }) {
       const f = clamp((age - 0.8) / 0.7, 0, 1);
       target = { x: target.x + (manual.x - target.x) * f, y: target.y + (manual.y - target.y) * f };
     }
-    if (t < settings.startSeconds || t > settings.endSeconds) target = manual;
+    if (t < input[0].t || t < settings.startSeconds || t > settings.endSeconds) target = manual;
     if (t > 0) {
       const iterations = Math.ceil(step * 60), dt = step / iterations;
       for (let n = 0; n < iterations; n++) {

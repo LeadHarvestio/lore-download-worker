@@ -32,12 +32,19 @@ var DOWNLOAD_DIR = process.env.DOWNLOAD_DIR || "/tmp/downloads";
 var faceAnalysis = createFaceAnalysisQueue(DOWNLOAD_DIR, () => activeProcesses > 0, () => startQueuedProcessJobs());
 const faceTrackingInstalled = () => Boolean(API_KEY) && fs.existsSync(process.env.FACE_MODEL_PATH || "/app/render/yunet.onnx");
 const faceTrackingReady = () => process.env.ENABLE_FACE_TRACKING === "1" && faceTrackingInstalled();
+const speakerAnalysisInstalled = () => Boolean(API_KEY) && process.env.FACE_ANALYSIS_CANDIDATE === "1" &&
+  fs.existsSync(process.env.ACTIVE_SPEAKER_MODEL_PATH || "/app/render/light-asd.onnx");
+const activeSpeakerReady = () => faceTrackingReady() && speakerAnalysisInstalled();
 app.post("/api/analyze/faces", auth, (req, res) => {
   // An explicit authenticated benchmark can validate the deployed CPU/model
   // without advertising tracking support or enabling it for every client.
   const benchmark = req.body?.benchmark === true;
+  if (req.body?.speakerFollow !== undefined && typeof req.body.speakerFollow !== "boolean")
+    return res.status(400).json({ error: "speakerFollow must be a boolean." });
+  if (req.body?.speakerFollow && !(benchmark ? speakerAnalysisInstalled() : activeSpeakerReady()))
+    return res.status(503).json({ error: "Speaker analysis model is not installed or tracking is disabled." });
   if (!(benchmark ? faceTrackingInstalled() : faceTrackingReady())) return res.status(503).json({ error: "Face tracking is awaiting performance validation and activation." });
-  try { res.status(202).json(faceAnalysis.enqueue(req.body.clipFilename, req.body.force === true)); }
+  try { res.status(202).json(faceAnalysis.enqueue(req.body.clipFilename, req.body.force === true, req.body.speakerFollow === true)); }
   catch (error) { res.status(400).json({ error: error.message }); }
 });
 app.get("/api/analyze/faces/:jobId", auth, (req, res) => {
@@ -439,7 +446,7 @@ app.get("/api/transcription-audio/:filename", auth, async function(req, res) {
 });
 
 app.get("/api/styles", auth, function(_req, res) {
-  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { affineTransforms: 1, sourceInstances: 2, voiceDucking: 1, segmentPunchIn: 1, zoomEffect: 1, flashBlend: 2, sourcePanes: 1, trackedNameTags: 1, headlineVisibility: 1, signedMedia: 1, segmentPlacement: 1, layerStack: 1, headlineDigits: 1, colorProcessing: 2, soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, headlineCoverStyle: 1, sourceEdit: 1, thumbnails: API_KEY ? 1 : 0, temporalEditing: 1, faceTracking: faceTrackingReady() ? 1 : 0, trackingSpeed: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, flicker: 1, subscribeOverlays: 1, captionReference: 1 } });
+  res.json({ presets: PRESETS, fonts: Object.keys(FONTS), output: { width: OUT_W, height: OUT_H, fps: FPS, previewWidth: PREVIEW_W, previewHeight: PREVIEW_H }, capabilities: { affineTransforms: 1, sourceInstances: 2, voiceDucking: 1, segmentPunchIn: 1, zoomEffect: 1, flashBlend: 2, sourcePanes: 1, trackedNameTags: 1, headlineVisibility: 1, signedMedia: 1, segmentPlacement: 1, layerStack: 1, headlineDigits: 1, colorProcessing: 2, soundEffects: 1, imageLayers: 1, musicOffset: 1, videoFilters: 1, censorship: 1, audioMuteFrameMs: 10, headerLayout: 2, captionPreviewTiming: 1, sourceEditing: 1, foregroundPosition: 1, headlineCover: 1, headlineCoverStyle: 1, sourceEdit: 1, thumbnails: API_KEY ? 1 : 0, temporalEditing: 1, faceTracking: faceTrackingReady() ? 1 : 0, activeSpeaker: activeSpeakerReady() ? 1 : 0, trackingSpeed: 1, transcriptionAudio: 1, downloadQueue: 1, maxConcurrentDownloads: 2, renderQueue: 1, maxConcurrentRenders: maxConcurrentProcesses, livePreview: 1, interactiveRenderPriority: 1, advancedEditing: 1, flicker: 1, subscribeOverlays: 1, captionReference: 1 } });
 });
 
 app.get("/api/styles/fonts/:id", auth, function(req, res) {

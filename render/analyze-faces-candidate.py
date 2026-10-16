@@ -15,7 +15,7 @@ cv2.setNumThreads(1)
 MAX_DURATION = 180  # Explicit bounded work; never silently reduce evidence fps.
 
 
-def analyze(filename, model, evidence_file=None):
+def analyze(filename, model, evidence_file=None, speakers=False):
     started = time.monotonic()
     detector = cv2.FaceDetectorYN.create(model, "", (320, 320), .65, .3, 2000)
     recognizer = cv2.FaceRecognizerSF.create(os.environ.get("FACE_APPEARANCE_MODEL_PATH", "/app/render/sface.onnx"), "")
@@ -113,8 +113,13 @@ def analyze(filename, model, evidence_file=None):
             if evidence_file:
                 os.remove(evidence_file)
             raise TimeoutError("Face analysis exceeded its 55-second active budget. No partial result was accepted.")
-        return {"tracks": compact, "thumbnails": [{"faceId": k, "jpegBase64": v} for k, v in thumbnails.items() if k in ids],
-                "duration": duration, "analysisSeconds": round(elapsed, 3),
+        speaker_evidence = None
+        if speakers:
+            from active_speaker import analyze_speakers
+            speaker_evidence = analyze_speakers(filename, evidence, duration, os.environ.get("ACTIVE_SPEAKER_MODEL_PATH", "/app/render/light-asd.onnx"))
+        return {"tracks": compact, **({"speakerEvidence": speaker_evidence} if speakers else {}),
+                "thumbnails": [{"faceId": k, "jpegBase64": v} for k, v in thumbnails.items() if k in ids],
+                "duration": duration, "analysisSeconds": round(time.monotonic() - started, 3),
                 "detector": "YuNet-2023mar/" + VERSION, "sampleFps": 10,
                 "evidence": manifest, "ambiguousAssociationsRejected": tracker.ambiguous,
                 "appearanceEvaluations": appearance_evaluations,
@@ -135,9 +140,10 @@ if __name__ == "__main__":
         parser = argparse.ArgumentParser()
         parser.add_argument("source")
         parser.add_argument("--evidence")
+        parser.add_argument("--speakers", action="store_true")
         args = parser.parse_args()
         try:
-            print(json.dumps(analyze(args.source, model, args.evidence)))
+            print(json.dumps(analyze(args.source, model, args.evidence, args.speakers)))
         except Exception as error:
             print(str(error), file=sys.stderr)
             sys.exit(1)
