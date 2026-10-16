@@ -57,6 +57,8 @@ function combinedFlashRGB(effects, at) {
 }
 const screenFlashPixel = (base, layer) => base.map((c, i) => 255 - (255 - c) * (255 - layer[i]) / 255);
 function trimFlash(e, startSeconds, requestedEnd) {
+  if (!Number.isFinite(startSeconds) || startSeconds < 0 || !Number.isFinite(requestedEnd))
+    throw new Error("Flash trim requires finite, non-negative timeline times.");
   const a = Math.max(2, e.rampInFrames), o = Math.max(2, e.rampOutFrames);
   const holdFrames = Math.max(0, Math.round((requestedEnd - startSeconds) * e.fps) - a - o);
   return {
@@ -70,6 +72,8 @@ function trimFlash(e, startSeconds, requestedEnd) {
   };
 }
 function projectFlashWindow(e, originalWindowStart, projectedStart, projectedEnd, speed = 1) {
+  if (![originalWindowStart, projectedStart, projectedEnd, speed].every(Number.isFinite) || originalWindowStart < e.startSeconds || projectedStart < 0 || projectedEnd <= projectedStart || speed <= 0)
+    throw new Error("Flash projection requires a valid surviving interval and positive playback speed.");
   return {
     ...e,
     startSeconds: projectedStart,
@@ -87,6 +91,10 @@ function flashEnvelopeExpression(e, clock = "T") {
 function flashChannelExpression(effects, channel, clock = "T") {
   const terms = effects.map((e) => `${parseInt(e.color.slice(1 + channel * 2, 3 + channel * 2), 16)}*${e.peakOpacity}*(${flashEnvelopeExpression(e, clock)})`);
   return `min(255,max(0,${terms.join("+") || "0"}))`;
+}
+function flashProposalEffect(proposal, id) {
+  const { beatId: _beatId, wordIdx: _wordIdx, reason: _reason, origin: _origin, ...effect } = proposal;
+  return { ...effect, id };
 }
 function proposeFlashes(beats, duration, capabilities, fps = 30) {
   if (!supportsFlashV2(capabilities)) return { effects: [], skippedReason: "Needs worker update: flashBlend:2. Smooth flashes were not substituted." };
@@ -114,6 +122,7 @@ export {
   flashEnvelopeExpression,
   flashFields,
   flashOpacityAt,
+  flashProposalEffect,
   isFlashV2,
   projectFlashWindow,
   proposeFlashes,
