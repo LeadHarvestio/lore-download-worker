@@ -113,8 +113,8 @@ export function directorLayoutFilter(style, width, height, sw, sh, source, edit,
   const frame = (layout, w, h, sw, sh, settings, look, at, origin) =>
     paneFilter(layout, w, h, sw, sh, settings, look, at, origin, style.effects || [], !style.sourcePanes, edit, mask);
   if (!style.sourcePanes) return segmentFramingFilter(style.layout, width, height, sw, sh, source, style.videoFilter, edit, at,
-    motion ? frame : mask ? (layout, w, h, sw, sh, settings, look, at) =>
-      layoutFilter(layout, w, h, sw, sh, settings, look, at, true) : undefined, !!motion);
+    motion ? frame : mask ? (layout, w, h, sw, sh, settings, look, at, origin) =>
+      layoutFilter(layout, w, h, sw, sh, settings, look, at, true, origin) : undefined, !!motion);
   const panes = paneDefinitions({ ...style, source }, height);
   const filters = ["[0:v]split=2[topinput][bottominput]"];
   for (const pane of panes) {

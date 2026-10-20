@@ -16,14 +16,14 @@ export function trackExpression(points, key, time = "t") {
   }
   return branch(0, points.length - 1);
 }
-export function trackedLayoutFilter(layout, width, height, sw, sh, settings, look, at) {
+export function trackedLayoutFilter(layout, width, height, sw, sh, settings, look, at, origin = 0) {
   const tracking = settings.tracking;
   const geometry = trackedForegroundGeometry(sw, sh, width, height, layout, settings, tracking, { t: 0, x: .5, y: .5 });
   const { cropWidth: cw, cropHeight: ch, cropX, cropY, foregroundWidth: fw, foregroundHeight: fh } = geometry;
   const zoom = Math.max(settings.zoom, tracking.zoom), vh = layout === "fill" ? height : Math.min(height, fh / zoom);
   const duration = Math.max(tracking.endSeconds, ...tracking.track.map(p => p.t), .1);
   const camera = smoothFaceTrack(tracking, duration);
-  const t = at === undefined ? "t" : String(at);
+  const t = at === undefined ? origin ? `(t+${origin})` : "t" : String(at);
   const x = `min(max(${width / 2}-${fw}*((${sw}*(${trackExpression(camera, "x", t)})-${cropX})/${cw}),${Math.min(0, width - fw)}),${Math.max(0, (width - fw) / 2)})`;
   const y = `min(max(${height / 2}-${fh}*((${sh}*(${trackExpression(camera, "y", t)})-${cropY})/${ch}),${(height - vh) / 2 + vh - fh}),${(height - vh) / 2})`;
   const crop = `crop=${cw}:${ch}:${cropX}:${cropY},`;

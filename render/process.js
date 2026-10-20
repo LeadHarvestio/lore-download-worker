@@ -129,7 +129,7 @@ export async function processClip(p) {
   let backgroundPath = p.inputPath;
   if (!preview) {
     const { muteAudio, ...geometry } = source;
-    const background = await cache.acquire("background-1080p-motion-v1", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, sourcePanes: style.sourcePanes, source: geometry, videoFilter: style.videoFilter, segmentPlacement: p.sourceEdit,
+    const background = await cache.acquire("background-1080p-sequential-v2", { input: fileFingerprint(p.inputPath), width, height, fps: FPS, layout: style.layout, sourcePanes: style.sourcePanes, source: geometry, videoFilter: style.videoFilter, segmentPlacement: p.sourceEdit,
       zooms: style.effects?.filter(e => e.type === "zoom") }, "mp4", async dest => {
       const framingScript = path.join(p.workDir, "source-framing.txt");
       fs.writeFileSync(framingScript, directorLayoutFilter(style, width, height, info.width, info.height, source, p.sourceEdit));

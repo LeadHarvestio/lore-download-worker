@@ -1,4 +1,5 @@
 import fs from "fs";
+import { renderFailureDetail } from "./render/render-errors.js";
 import path from "path";
 import os from "os";
 import { execFile } from "child_process";
@@ -330,7 +331,7 @@ export async function processVideo({
         musicDb: musicVolumeDb,
       });
     } catch (error) {
-      const detail = safeText(error?.stderr || error?.message || "unknown FFmpeg error", 700);
+      const detail = safeText(renderFailureDetail(error), 700);
       throw new Error(`FFmpeg render failed: ${detail}`);
     }
 
