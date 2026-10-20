@@ -31,9 +31,9 @@ export function foregroundGeometry(sourceWidth, sourceHeight, width, height, sou
   return { croppedWidth, croppedHeight, width: even(croppedWidth * scale), height: even(croppedHeight * scale) };
 }
 
-export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, source = {}, videoFilter = {}, previewAt, mask = false) {
+export function layoutFilter(layout, width, height, sourceWidth, sourceHeight, source = {}, videoFilter = {}, previewAt, mask = false, origin = 0) {
   const settings = sourceSettings(source);
-  if (settings.tracking?.enabled) return trackedLayoutFilter(layout, width, height, sourceWidth, sourceHeight, settings, videoFilter, previewAt);
+  if (settings.tracking?.enabled) return trackedLayoutFilter(layout, width, height, sourceWidth, sourceHeight, settings, videoFilter, previewAt, origin);
   const look = sourceVideoFilter(videoFilter);
   if (layout === "fill") {
     if (settings.affine || mask || settings.zoom !== 1 || settings.cropLeftPct || settings.cropRightPct || settings.cropTopPct || settings.cropBottomPct) {
