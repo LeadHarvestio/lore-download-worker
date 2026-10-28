@@ -223,6 +223,8 @@ async function transcribeVideo(clipPath) {
 import { validateDirectorLayout } from "./render/director-layout.js";
 
 export function validateStyleInput(presetId, overrides, sourceEdit) {
+  if (overrides?.caption?.enabled !== undefined && typeof overrides.caption.enabled !== "boolean")
+    throw new Error("Caption enabled must be a boolean.");
   validateAffineUsage(overrides, sourceEdit);
   if (presetId !== undefined && typeof presetId !== "string") throw new Error("stylePresetId must be a string.");
   if (overrides !== undefined && (overrides === null || typeof overrides !== "object" || Array.isArray(overrides))) {
@@ -308,13 +310,14 @@ export async function processVideo({
   try {
     const rawWords = Array.isArray(providedWords) ? cleanProvidedWords(providedWords) : await transcribeWords(clipPath);
     const words = normalizeWords(rawWords, captionDuration);
+    const style = resolveStyle(stylePresetId, styleOverrides);
     // Raw words remain the canonical cache. Only display/export copies are masked.
     const captionWords = censorCaptions ? censorWords(words) : words;
     const muteRanges = muteExpletives ? expletiveRanges(words, probe.durationSeconds) : [];
-    if (words.length) fs.writeFileSync(srtPath, buildSrt(captionWords), "utf8");
+    const captionsEnabled = style.caption.enabled !== false;
+    if (words.length && captionsEnabled) fs.writeFileSync(srtPath, buildSrt(captionWords), "utf8");
     if (musicUrl) await fetchMusicFile(musicUrl, musicPath);
 
-    const style = resolveStyle(stylePresetId, styleOverrides);
     let rendered;
     try {
       rendered = await processClip({
@@ -342,7 +345,7 @@ export async function processVideo({
     succeeded = true;
     return {
       outputPath,
-      srtPath: words.length ? srtPath : null,
+      srtPath: words.length && captionsEnabled ? srtPath : null,
       durationSeconds: outputProbe.durationSeconds,
       outputWidth: outputProbe.width,
       outputHeight: outputProbe.height,
