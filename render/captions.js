@@ -37,6 +37,7 @@ export function buildChunks(words, S) {
 }
 
 export function buildCaptionCues({ words, width, style }) {
+  if (style.enabled === false) return [];
   loadFonts();
   const family = FONTS[style.font]?.family || "Archivo Black";
   const fontSize = Math.round(width * style.sizePct / 100);

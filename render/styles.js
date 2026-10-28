@@ -122,6 +122,8 @@ export function resolveStyle(presetId, overrides = {}) {
   result.source = sourceSettings(result.source);
   // Do not add fields to PRESETS: older published app schemas remain compatible.
   result.videoFilter = videoFilterSettings(result.videoFilter);
+  if (result.caption.enabled !== undefined && typeof result.caption.enabled !== "boolean")
+    throw new Error("Caption enabled must be a boolean.");
   result.musicStartSeconds = result.musicStartSeconds ?? 0;
   if (result.musicWindow && (!Object.values(result.musicWindow).every(Number.isFinite)
     || result.musicWindow.startSeconds < 0 || result.musicWindow.endSeconds <= result.musicWindow.startSeconds || result.musicWindow.endSeconds > 1800))
